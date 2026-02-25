@@ -1,0 +1,31 @@
+# Web framework
+fastapi
+uvicorn
+python-dotenv
+
+# Supabase
+supabase
+
+# LlamaIndex
+llama-index
+llama-index-vector-stores-supabase
+
+# LangChain / LangGraph
+langchain
+langgraph
+
+# Observability & evaluation
+langfuse
+ragas
+
+# AI providers
+openai
+anthropic
+google-generativeai
+
+# HTTP & data
+requests
+beautifulsoup4
+feedparser
+httpx
+pandas
