@@ -57,16 +57,18 @@ def retrieve_documents(query: str, top_k: int = 5) -> list[dict]:
     Requires match_forex_documents RPC (run backend/db/match_forex_documents.sql).
     """
     query_embedding = _get_embedding(query)
+    # Pass as string — PostgREST doesn't reliably serialize list to vector type.
+    embedding_str = json.dumps(query_embedding)
     supabase = get_supabase()
     response = supabase.rpc(
         "match_forex_documents",
         {
-            "query_embedding": query_embedding,
+            "query_embedding": embedding_str,
             "match_threshold": 0.0,
             "match_count": top_k,
         },
     ).execute()
-    rows = response.data or []
+    rows = response.data if response.data is not None else []
     return [
         {
             "id": r["id"],

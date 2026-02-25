@@ -1,0 +1,38 @@
+LlamaIndex + pgvector Round-Trip Test — Baseline Retrieval
+============================================================
+
+{
+  "query": "RBA interest rate decision",
+  "top_5_results": [
+    {
+      "id": 2,
+      "similarity": 0.73708578790257,
+      "source": "rba_speech",
+      "content_preview": "RBA Governor Michele Bullock stated that the Board is not ruling anything in or out regarding future"
+    },
+    {
+      "id": 4,
+      "similarity": 0.682470702448336,
+      "source": "rba_smp",
+      "content_preview": "The RBA's latest Statement on Monetary Policy revised down growth forecasts and indicated that a res"
+    },
+    {
+      "id": 1,
+      "similarity": 0.630876597542461,
+      "source": "rba_statement",
+      "content_preview": "The Reserve Bank of Australia held the cash rate at 4.35% at its February 2025 meeting. The Board no"
+    },
+    {
+      "id": 3,
+      "similarity": 0.512964413729111,
+      "source": "aud_analysis",
+      "content_preview": "Australian dollar strength has been supported by resilient commodity prices and narrowing interest r"
+    },
+    {
+      "id": 5,
+      "similarity": 0.464035506729545,
+      "source": "rba_rates",
+      "content_preview": "Interest rates in Australia have risen sharply since May 2022. The full effect of these increases is"
+    }
+  ]
+}
