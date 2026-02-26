@@ -23,6 +23,7 @@ load_dotenv(_backend.parent / ".env")
 
 from agents.coach_agent import run_coach_agent
 from agents.macro_agent import run_macro_agent
+from agents.signal_agent import run_signal_agent
 from agents.technical_agent import run_technical_agent
 from agents.journal_agent import run_journal_agent
 
@@ -101,10 +102,12 @@ def coach_agent_node(state: ForexState) -> ForexState:
 
 
 def signal_agent_node(state: ForexState) -> ForexState:
-    """Placeholder: pass state through, no final_signal."""
-    # TODO: Replace with real SignalAgent
-    _log_state("signal (placeholder)", state)
-    return {"final_signal": None}
+    """Run SignalAgent: generate structured signal, save to signal_outcomes."""
+    result = run_signal_agent(dict(state))
+    final_signal = result.get("final_signal")
+    error = result.get("error")
+    _log_state("signal", {**state, "final_signal": final_signal})
+    return {"final_signal": final_signal, "error": error}
 
 
 def _route_after_coach(state: ForexState) -> Literal["signal", "__end__"]:
