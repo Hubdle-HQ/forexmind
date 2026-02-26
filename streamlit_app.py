@@ -416,10 +416,10 @@ def _render_signal_output_tab() -> None:
     tech = sig.get("technical_setup") or {}
     direction = fs.get("direction", "BUY")
     is_buy = direction.upper() == "BUY"
-    conf = fs.get("confidence_pct") or fs.get("confidence", 0)
+    conf = fs.get("confidence_pct") or fs.get("confidence_percentage") or fs.get("confidence", 0)
     setup = tech.get("setup", "—")
     mode = (sig.get("user_patterns") or {}).get("mode", "market_patterns")
-    reasoning_raw = fs.get("reasoning", "") or ""
+    reasoning_raw = fs.get("reasoning", "") or fs.get("reasoning_summary", "") or ""
     reasoning_short = html.escape(reasoning_raw[:200]) if reasoning_raw else "—"
     reasoning_suffix = "..." if len(reasoning_raw) > 200 else ""
 
@@ -454,7 +454,7 @@ def _render_signal_output_tab() -> None:
     entry = fs.get("entry_price", "—")
     tp = fs.get("take_profit", "—")
     sl = fs.get("stop_loss", "—")
-    rr = fs.get("risk_reward", "—")
+    rr = fs.get("risk_reward", "—") or fs.get("risk_reward_ratio", "—")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.caption("Entry")
