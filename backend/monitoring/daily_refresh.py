@@ -1,11 +1,13 @@
 """
 Daily data refresh: scrapers, embed, mark stale, signal evaluator, health check.
+RAGAS evaluation runs weekly on Sundays only.
 """
 from __future__ import annotations
 
 import logging
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -121,6 +123,7 @@ def run_daily_refresh() -> dict:
         "signals_resolved": 0,
         "health": {},
         "alert_sent": False,
+        "ragas_scores": {},
     }
 
     # 1. Mark old as stale (before ingesting so new ones stay fresh)
@@ -160,5 +163,14 @@ def run_daily_refresh() -> dict:
         results["alert_sent"] = check_and_send_failure_alerts()
     except Exception as e:
         logger.exception("Failure alert check failed: %s", e)
+
+    # 6. RAGAS evaluation (Sundays only)
+    if datetime.now(timezone.utc).weekday() == 6:
+        try:
+            from evals.rag_evaluator import run_ragas_evaluation
+
+            results["ragas_scores"] = run_ragas_evaluation()
+        except Exception as e:
+            logger.exception("RAGAS evaluation failed: %s", e)
 
     return results
