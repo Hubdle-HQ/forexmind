@@ -22,6 +22,7 @@ load_dotenv(_backend.parent / ".env")
 
 from agents.graph import build_graph
 from db.supabase_client import get_supabase
+from monitoring.daily_refresh import run_daily_refresh
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -159,6 +160,20 @@ def pipeline_status() -> dict:
         return {"entries": filtered[:100], "count": len(filtered)}
     except Exception as e:
         logger.exception("pipeline-status failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/run-daily-refresh")
+def run_daily_refresh_endpoint() -> dict:
+    """
+    Run daily data refresh: scrapers, embed new docs, mark old stale,
+    signal evaluator, health check. Called by cron at 6am AEST.
+    """
+    try:
+        results = run_daily_refresh()
+        return {"ok": True, "results": results}
+    except Exception as e:
+        logger.exception("run-daily-refresh failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
