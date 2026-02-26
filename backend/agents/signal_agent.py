@@ -161,7 +161,13 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
     # Save to signal_outcomes
     try:
         signal_id = uuid.uuid4()
-        get_supabase().table("signal_outcomes").insert({
+        trace_id = None
+        try:
+            from langfuse import get_client
+            trace_id = get_client().get_current_trace_id()
+        except Exception:
+            pass
+        insert_data = {
             "signal_id": str(signal_id),
             "pair": pair,
             "direction": direction,
@@ -173,7 +179,10 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
             "pips_result": None,
             "generated_at": gen_at,
             "resolved_at": None,
-        }).execute()
+        }
+        if trace_id:
+            insert_data["langfuse_trace_id"] = trace_id
+        get_supabase().table("signal_outcomes").insert(insert_data).execute()
         final_signal["signal_id"] = str(signal_id)
         logger.info("Saved signal to signal_outcomes: %s", signal_id)
     except Exception as e:
