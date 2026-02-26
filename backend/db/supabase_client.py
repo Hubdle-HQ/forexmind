@@ -28,10 +28,6 @@ def get_supabase() -> Client:
     return _supabase
 
 
-# Export single instance — use this in the rest of the codebase
-supabase: Client = get_supabase()
-
-
 def test_connection() -> None:
     """Run a simple SELECT on pipeline_health to verify the connection."""
     try:
