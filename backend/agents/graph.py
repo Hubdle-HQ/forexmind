@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 
 load_dotenv(_backend.parent / ".env")
 
+from agents.coach_agent import run_coach_agent
 from agents.macro_agent import run_macro_agent
 from agents.technical_agent import run_technical_agent
 from agents.journal_agent import run_journal_agent
@@ -79,10 +80,24 @@ def journal_node(state: ForexState) -> ForexState:
 
 
 def coach_agent_node(state: ForexState) -> ForexState:
-    """Placeholder: pass state through, set should_trade=False for now."""
-    # TODO: Replace with real CoachAgent
-    _log_state("coach (placeholder)", state)
-    return {"coach_advice": "Placeholder", "should_trade": False}
+    """Run CoachAgent: 3-condition gate + Claude synthesis."""
+    pair = state.get("pair", "AUD/USD")
+    macro_sentiment = state.get("macro_sentiment")
+    technical_setup = state.get("technical_setup")
+    user_patterns = state.get("user_patterns")
+    state_error = state.get("error")
+
+    result = run_coach_agent(
+        macro_sentiment=macro_sentiment,
+        technical_setup=technical_setup,
+        user_patterns=user_patterns,
+        pair=pair,
+        state_error=state_error,
+    )
+    coach_advice = result.get("coaching_note", "")
+    should_trade = result.get("should_trade", False)
+    _log_state("coach", {**state, "coach_advice": coach_advice, "should_trade": should_trade})
+    return {"coach_advice": coach_advice, "should_trade": should_trade}
 
 
 def signal_agent_node(state: ForexState) -> ForexState:
