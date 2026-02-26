@@ -1,0 +1,130 @@
+"""
+LangGraph StateGraph: ForexMind pipeline orchestrator.
+
+Flow: macro → technical → journal → coach → [gate] → signal → END
+                                            ↘ END (if should_trade = False)
+"""
+import logging
+import sys
+from pathlib import Path
+from typing import Literal, Optional, TypedDict
+
+from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+# Add backend to path
+_backend = Path(__file__).resolve().parent.parent
+if str(_backend) not in sys.path:
+    sys.path.insert(0, str(_backend))
+
+from dotenv import load_dotenv
+
+load_dotenv(_backend.parent / ".env")
+
+from agents.macro_agent import run_macro_agent
+from agents.technical_agent import run_technical_agent
+from agents.journal_agent import run_journal_agent
+
+logger = logging.getLogger(__name__)
+
+# Set to True to print state after each node (for verification)
+PRINT_STATE_AFTER_NODE = True
+
+
+class ForexState(TypedDict, total=False):
+    pair: str
+    macro_sentiment: Optional[dict]
+    technical_setup: Optional[dict]
+    user_patterns: Optional[dict]
+    coach_advice: Optional[str]
+    final_signal: Optional[dict]
+    should_trade: bool
+    error: Optional[str]
+
+
+def _log_state(node_name: str, state: ForexState) -> None:
+    """Print state after each node for verification."""
+    if PRINT_STATE_AFTER_NODE:
+        logger.info("--- State after %s ---", node_name)
+        for k, v in state.items():
+            if v is not None:
+                logger.info("  %s: %s", k, v)
+
+
+def macro_node(state: ForexState) -> ForexState:
+    """Run MacroAgent, update macro_sentiment."""
+    pair = state.get("pair", "AUD/USD")
+    result = run_macro_agent(pair)
+    _log_state("macro", {**state, "macro_sentiment": result})
+    return {"macro_sentiment": result}
+
+
+def technical_node(state: ForexState) -> ForexState:
+    """Run TechnicalAgent, update technical_setup."""
+    pair = state.get("pair", "AUD/USD")
+    macro_sentiment = state.get("macro_sentiment")
+    result = run_technical_agent(pair, macro_sentiment=macro_sentiment)
+    _log_state("technical", {**state, "technical_setup": result})
+    return {"technical_setup": result}
+
+
+def journal_node(state: ForexState) -> ForexState:
+    """Run JournalAgent, update user_patterns."""
+    pair = state.get("pair", "AUD/USD")
+    technical_setup = state.get("technical_setup") or {}
+    setup_type = technical_setup.get("setup", "unknown")
+    result = run_journal_agent(pair, setup_type=setup_type)
+    _log_state("journal", {**state, "user_patterns": result})
+    return {"user_patterns": result}
+
+
+def coach_agent_node(state: ForexState) -> ForexState:
+    """Placeholder: pass state through, set should_trade=False for now."""
+    # TODO: Replace with real CoachAgent
+    _log_state("coach (placeholder)", state)
+    return {"coach_advice": "Placeholder", "should_trade": False}
+
+
+def signal_agent_node(state: ForexState) -> ForexState:
+    """Placeholder: pass state through, no final_signal."""
+    # TODO: Replace with real SignalAgent
+    _log_state("signal (placeholder)", state)
+    return {"final_signal": None}
+
+
+def _route_after_coach(state: ForexState) -> Literal["signal", "__end__"]:
+    """Route to signal if should_trade, else END."""
+    if state.get("should_trade"):
+        return "signal"
+    return "__end__"
+
+
+def build_graph() -> CompiledStateGraph:
+    """Build and compile the ForexMind pipeline graph."""
+    graph = StateGraph(ForexState)
+
+    graph.add_node("macro", macro_node)
+    graph.add_node("technical", technical_node)
+    graph.add_node("journal", journal_node)
+    graph.add_node("coach", coach_agent_node)
+    graph.add_node("signal", signal_agent_node)
+
+    graph.set_entry_point("macro")
+    graph.add_edge("macro", "technical")
+    graph.add_edge("technical", "journal")
+    graph.add_edge("journal", "coach")
+    graph.add_conditional_edges("coach", _route_after_coach, {"signal": "signal", "__end__": END})
+    graph.add_edge("signal", END)
+
+    return graph.compile()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    compiled = build_graph()
+    initial: ForexState = {"pair": "AUD/USD"}
+    result = compiled.invoke(initial)
+    logger.info("=== Final state ===")
+    for k, v in result.items():
+        if v is not None:
+            logger.info("  %s: %s", k, v)
