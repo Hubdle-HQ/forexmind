@@ -193,9 +193,23 @@ Every source has 3 layers. Never fail silently — always log to `pipeline_healt
 
 ---
 
+## Deployment URLs
+
+| Env   | Backend API                                      |
+| ----- | ------------------------------------------------- |
+| dev   | `http://localhost:8000`                           |
+| prod  | `https://forexmind-production.up.railway.app`     |
+
+Use `config.get_api_base_url()` or set `API_BASE_URL` in `.env` to switch.
+
+---
+
 ## Environment Variables Required
 
 ```
+# API (clients: Streamlit, scripts)
+# API_BASE_URL=   # unset = dev; set to prod URL when needed
+
 # Supabase
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
