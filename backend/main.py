@@ -26,7 +26,12 @@ from db.supabase_client import get_supabase
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ForexMind API", version="1.0.0")
+app = FastAPI(
+    title="ForexMind API",
+    version="1.0.0",
+    description="Multi-agent Forex signal generation pipeline. Endpoints: generate-signal, health, pipeline-status, signal-accuracy.",
+    servers=[{"url": "http://localhost:8000", "description": "Local development"}],
+)
 
 app.add_middleware(
     CORSMiddleware,
