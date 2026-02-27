@@ -5,7 +5,7 @@ name: Daily Refresh
 on:
   schedule:
     # 20:00 UTC = 6am AEST next day
-    - cron: "*/5 * * * *" # For testing: every 5 minutes
+    - cron: "0 20 * * *"
   workflow_dispatch: # Allow manual trigger from GitHub Actions UI
 
 jobs:
