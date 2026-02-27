@@ -1,24 +1,21 @@
-# Railway Cron — 6am AEST Daily Refresh
+# Daily Refresh Cron — Setup Options
 
-## Setup
+Runs at **20:00 UTC** (6am AEST next day): scrapers, RAG ingest, signal evaluator, health check, RAGAS (Sundays only).
 
-1. In Railway, add a **new service** to the same project (or use an existing cron service).
-2. Use the same repo and root directory as the web service.
-3. Set **Start Command** to:
-   ```
-   cd backend && python -m scripts.run_daily_refresh
-   ```
-4. In **Settings** → **Cron Schedule**, set:
-   ```
-   0 20 * * *
-   ```
-   (8pm UTC = 6am AEST next day)
+---
 
-5. Ensure the cron service has the same env vars as the web service (Supabase, OANDA, SMTP, etc.).
+## Option 1: External Cron (Recommended — Free)
 
-## Alternative: HTTP trigger
+See **[docs/DAILY_REFRESH_CRON_SETUP.md](../../docs/DAILY_REFRESH_CRON_SETUP.md)** for:
 
-If you prefer to call the endpoint instead:
+- **GitHub Actions** — Already configured in `.github/workflows/daily-refresh.yml`. Push to GitHub and enable Actions.
+- **cron-job.org** — Free. POST to `https://forexmind-production.up.railway.app/run-daily-refresh` daily.
 
-- Use a cron service that runs: `curl -X POST https://your-app.up.railway.app/run-daily-refresh`
-- Or use an external cron (cron-job.org, GitHub Actions) to POST to `/run-daily-refresh`.
+---
+
+## Option 2: Railway Cron Service (Paid)
+
+1. Add a **new service** to the same project.
+2. **Start Command:** `cd backend && python -m scripts.run_daily_refresh`
+3. **Cron Schedule:** `0 20 * * *`
+4. Same env vars as the web service.
