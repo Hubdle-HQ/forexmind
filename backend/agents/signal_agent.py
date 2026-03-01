@@ -30,6 +30,28 @@ logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o-mini"
 
+MARKET_CLOSED_MESSAGE = "Market closed — next session: Monday 6am AEST"
+
+
+def _is_market_open() -> bool:
+    """
+    Forex market: closed Friday 22:00 UTC through Sunday 22:00 UTC.
+    Returns True if market is open, False if closed.
+    """
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+    hour = now.hour
+    # Saturday: closed
+    if weekday == 5:
+        return False
+    # Sunday before 22:00 UTC: closed
+    if weekday == 6 and hour < 22:
+        return False
+    # Friday 22:00 UTC onward: closed
+    if weekday == 4 and hour >= 22:
+        return False
+    return True
+
 
 def _extract_json(text: str) -> dict | None:
     """Extract JSON from model response. Handles markdown code blocks."""
@@ -98,6 +120,9 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
     Generate structured signal from full state. Save to signal_outcomes.
     Returns { final_signal: dict or None, error: str or None }.
     """
+    if not _is_market_open():
+        return {"final_signal": None, "error": MARKET_CLOSED_MESSAGE}
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return {"final_signal": None, "error": "OPENAI_API_KEY not set"}

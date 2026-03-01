@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 CANDLE_COUNT = 72
 CANDLE_GRANULARITY = "H1"
 RESOLVE_AFTER_HOURS = 24
+RESOLVE_TIMEOUT_HOURS = 72  # If neither TP nor SL hit after this, mark as expired
 
 
 def _pip_size(pair: str) -> float:
@@ -187,7 +188,23 @@ def resolve_unresolved_signals() -> int:
 
         result = _resolve_single(row, candles, gen_at)
         if result is None:
-            logger.debug("Signal %s could not be resolved (no TP/SL hit in window)", row_id)
+            # Timeout: if signal is older than RESOLVE_TIMEOUT_HOURS, mark as expired
+            age_hours = (datetime.now(timezone.utc) - gen_at).total_seconds() / 3600
+            if age_hours >= RESOLVE_TIMEOUT_HOURS:
+                now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                try:
+                    supabase.table("signal_outcomes").update({
+                        "hit_tp": False,
+                        "hit_sl": False,
+                        "pips_result": 0.0,
+                        "resolved_at": now_str,
+                    }).eq("id", row_id).execute()
+                    resolved_count += 1
+                    logger.info("Expired signal %s (no TP/SL hit within %dh)", row_id, RESOLVE_TIMEOUT_HOURS)
+                except Exception as e:
+                    logger.exception("Failed to expire signal %s: %s", row_id, e)
+            else:
+                logger.debug("Signal %s could not be resolved (no TP/SL hit in window)", row_id)
             continue
 
         hit_tp, hit_sl, pips_result = result
@@ -239,6 +256,7 @@ def _log_langfuse_score(row_id: int, row: dict[str, Any], hit_tp: bool) -> None:
 def get_rolling_30d_win_rate() -> dict[str, Any]:
     """
     Compute rolling 30-day win rate from resolved signals.
+    Excludes expired signals (hit_tp=False and hit_sl=False) from win rate.
     Returns dict with: win_rate, resolved_count, wins, losses.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
@@ -253,8 +271,10 @@ def get_rolling_30d_win_rate() -> dict[str, Any]:
         .execute()
     )
     data = rows.data or []
-    wins = sum(1 for r in data if r.get("hit_tp") is True)
-    total = len(data)
+    # Exclude expired (neither TP nor SL hit)
+    resolved = [r for r in data if r.get("hit_tp") is True or r.get("hit_sl") is True]
+    wins = sum(1 for r in resolved if r.get("hit_tp") is True)
+    total = len(resolved)
     win_rate = round(wins / total, 4) if total > 0 else 0.0
     return {
         "win_rate": win_rate,
