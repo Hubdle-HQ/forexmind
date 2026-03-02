@@ -16,13 +16,21 @@ jobs:
         run: |
           API_URL="${{ vars.DAILY_REFRESH_URL }}"
           if [ -z "$API_URL" ]; then API_URL="https://forexmind-production.up.railway.app"; fi
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${API_URL}/run-daily-refresh")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "Response ($HTTP_CODE): $BODY"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Daily refresh completed successfully"
-          else
-            echo "Daily refresh failed with HTTP $HTTP_CODE"
-            exit 1
-          fi
+          MAX_ATTEMPTS=3
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Attempt $i of $MAX_ATTEMPTS..."
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${API_URL}/run-daily-refresh" --max-time 300)
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            echo "Response ($HTTP_CODE): $BODY"
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "Daily refresh completed successfully"
+              exit 0
+            fi
+            if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Retrying in 60s (429/5xx may be transient)..."
+              sleep 60
+            fi
+          done
+          echo "Daily refresh failed after $MAX_ATTEMPTS attempts"
+          exit 1
