@@ -463,3 +463,317 @@ def analyse_timeframes(
         result["tradeable"] = True
 
     return result
+
+
+def detect_patterns(
+    candles: list[dict[str, Any]],
+    indicators: dict[str, Any],
+    structure: dict[str, Any],
+    mtf: dict[str, Any],
+    pair: str,
+) -> dict[str, Any]:
+    """
+    Detects exactly 4 coded patterns.
+    All conditions are explicit coded rules.
+    No LLM estimation anywhere in this function.
+
+    IMPORTANT: This function requires mtf to be populated.
+    It must only be called after analyse_timeframes() has run
+    and after the MTF conflict gate has passed.
+    Never call this function with an empty or None mtf dict.
+
+    Priority order (first match wins):
+    1. trend_continuation_ema_pullback  (highest quality)
+    2. engulfing_at_key_level
+    3. break_of_structure_reversal
+    4. asian_range_breakout
+
+    Args:
+        candles:    H1 OHLCV list — minimum 30 candles required
+        indicators: output from calculate_indicators() Week 1
+        structure:  output from detect_structure() Week 2
+        mtf:        output from analyse_timeframes() Week 3
+                    MUST be populated — do not pass empty dict
+        pair:       currency pair string e.g. "GBP/JPY"
+
+    Returns:
+    {
+        "pattern_detected":  bool,
+        "pattern_name":      str,
+        "pattern_direction": "BUY"|"SELL"|"NEUTRAL",
+        "quality_floor":     float,
+        "quality_ceiling":   float,
+        "conditions_met":    list[str]
+    }
+    """
+
+    def _no_pattern_result() -> dict:
+        return {
+            "pattern_detected": False,
+            "pattern_name": "no_pattern",
+            "pattern_direction": "NEUTRAL",
+            "quality_floor": 0.0,
+            "quality_ceiling": 1.0,
+            "conditions_met": [],
+        }
+
+    if not mtf or not indicators or not structure:
+        logger.warning(
+            "detect_patterns called with missing inputs for %s — returning no_pattern",
+            pair,
+        )
+        return _no_pattern_result()
+
+    if len(candles) < 30:
+        logger.debug("detect_patterns: need at least 30 candles for %s, got %d", pair, len(candles))
+        return _no_pattern_result()
+
+    normalized = [_normalize_candle(c) for c in candles]
+    pip_thresh = get_pair_pip_threshold(pair)
+
+    # Extract values with safe defaults
+    rsi_val = float(indicators.get("rsi_14") or 50.0)
+    ema_20 = float(indicators.get("ema_20") or 0.0)
+    ema_50 = float(indicators.get("ema_50") or 0.0)
+    atr_val = float(indicators.get("atr_14") or 0.0)
+    current_price = float(indicators.get("current_price") or 0.0)
+    ema_trend = str(indicators.get("ema_trend", "neutral"))
+    d1_bias = str(mtf.get("d1_bias", "neutral"))
+    h4_structure = str(mtf.get("h4_structure", "neutral"))
+    hh_hl = bool(structure.get("hh_hl", False))
+    ll_lh = bool(structure.get("ll_lh", False))
+    at_ema_20 = bool(structure.get("at_ema_20", False))
+
+    if atr_val <= 0:
+        logger.debug("detect_patterns: ATR zero or negative for %s", pair)
+        return _no_pattern_result()
+
+    # --- 1. trend_continuation_ema_pullback ---
+    conds: list[str] = []
+    if ema_trend == "bullish" and d1_bias == "bullish" and at_ema_20:
+        o1, h1, l1, c1 = normalized[-1]["open"], normalized[-1]["high"], normalized[-1]["low"], normalized[-1]["close"]
+        if ema_20 > 0:
+            touch = abs(l1 - ema_20) < atr_val * 0.3
+            if touch and c1 > o1 and 40 <= rsi_val <= 60:
+                conds = ["ema_trend bullish", "d1_bias bullish", "at_ema_20 True", "pullback rejection BUY", "RSI 40-60"]
+                logger.info(
+                    "Pattern detected for %s: trend_continuation_ema_pullback BUY "
+                    "quality [0.72-0.88] conditions: %s",
+                    pair,
+                    conds,
+                )
+                return {
+                    "pattern_detected": True,
+                    "pattern_name": "trend_continuation_ema_pullback",
+                    "pattern_direction": "BUY",
+                    "quality_floor": 0.72,
+                    "quality_ceiling": 0.88,
+                    "conditions_met": conds,
+                }
+    if ema_trend == "bearish" and d1_bias == "bearish" and at_ema_20:
+        o1, h1, l1, c1 = normalized[-1]["open"], normalized[-1]["high"], normalized[-1]["low"], normalized[-1]["close"]
+        if ema_20 > 0:
+            touch = abs(h1 - ema_20) < atr_val * 0.3
+            if touch and c1 < o1 and 40 <= rsi_val <= 60:
+                conds = ["ema_trend bearish", "d1_bias bearish", "at_ema_20 True", "pullback rejection SELL", "RSI 40-60"]
+                logger.info(
+                    "Pattern detected for %s: trend_continuation_ema_pullback SELL "
+                    "quality [0.72-0.88] conditions: %s",
+                    pair,
+                    conds,
+                )
+                return {
+                    "pattern_detected": True,
+                    "pattern_name": "trend_continuation_ema_pullback",
+                    "pattern_direction": "SELL",
+                    "quality_floor": 0.72,
+                    "quality_ceiling": 0.88,
+                    "conditions_met": conds,
+                }
+
+    # --- 2. engulfing_at_key_level ---
+    o1, h1, l1, c1 = normalized[-1]["open"], normalized[-1]["high"], normalized[-1]["low"], normalized[-1]["close"]
+    o2, c2 = normalized[-2]["open"], normalized[-2]["close"]
+    body1 = abs(c1 - o1)
+    body2 = abs(c2 - o2)
+    bullish_engulf = c1 > o1 and (c1 > o2 and o1 < c2)
+    bearish_engulf = c1 < o1 and (c1 < o2 and o1 > c2)
+    engulfing = body1 > body2 and (bullish_engulf or bearish_engulf)
+
+    if engulfing:
+        if body2 <= 0:
+            pass
+        else:
+            swing_high = max(n["high"] for n in normalized[-20:]) if len(normalized) >= 20 else h1
+            swing_low = min(n["low"] for n in normalized[-20:]) if len(normalized) >= 20 else l1
+            near_ema50 = abs(current_price - ema_50) <= atr_val * 1.0 if ema_50 else False
+            near_swing_high = abs(current_price - swing_high) <= atr_val * 1.0
+            near_swing_low = abs(current_price - swing_low) <= atr_val * 1.0
+            key_level = near_ema50 or near_swing_high or near_swing_low
+
+            if bullish_engulf and key_level and rsi_val < 65:
+                conds = ["engulfing bullish", "key_level True", "RSI < 65"]
+                logger.info(
+                    "Pattern detected for %s: engulfing_at_key_level BUY "
+                    "quality [0.70-0.85] conditions: %s",
+                    pair,
+                    conds,
+                )
+                return {
+                    "pattern_detected": True,
+                    "pattern_name": "engulfing_at_key_level",
+                    "pattern_direction": "BUY",
+                    "quality_floor": 0.70,
+                    "quality_ceiling": 0.85,
+                    "conditions_met": conds,
+                }
+            if bearish_engulf and key_level and rsi_val > 35:
+                conds = ["engulfing bearish", "key_level True", "RSI > 35"]
+                logger.info(
+                    "Pattern detected for %s: engulfing_at_key_level SELL "
+                    "quality [0.70-0.85] conditions: %s",
+                    pair,
+                    conds,
+                )
+                return {
+                    "pattern_detected": True,
+                    "pattern_name": "engulfing_at_key_level",
+                    "pattern_direction": "SELL",
+                    "quality_floor": 0.70,
+                    "quality_ceiling": 0.85,
+                    "conditions_met": conds,
+                }
+
+    # --- 3. break_of_structure_reversal ---
+    # Reversal: prior downtrend + break above = bullish; prior uptrend + break below = bearish
+    highs = [n["high"] for n in normalized]
+    lows = [n["low"] for n in normalized]
+    if len(highs) >= 6 and len(lows) >= 6:
+        recent_high = max(highs[-6:-1])
+        recent_low = min(lows[-6:-1])
+        bullish_bos = current_price > recent_high and ll_lh  # prior downtrend, break up = reversal
+        bearish_bos = current_price < recent_low and hh_hl    # prior uptrend, break down = reversal
+
+        if bullish_bos or bearish_bos:
+            df = pd.DataFrame(normalized)
+            import pandas_ta as ta
+            rsi_series = ta.rsi(df["close"], length=14)
+            rsi_1 = float(rsi_series.iloc[-1]) if rsi_series is not None and len(rsi_series) >= 1 and pd.notna(rsi_series.iloc[-1]) else 50.0
+            rsi_2 = float(rsi_series.iloc[-2]) if rsi_series is not None and len(rsi_series) >= 2 and pd.notna(rsi_series.iloc[-2]) else 50.0
+
+            if bullish_bos and h4_structure != "bearish":
+                rsi_cross_above = rsi_1 > 50 and rsi_2 <= 50
+                if rsi_cross_above:
+                    conds = ["prior uptrend hh_hl", "BOS bullish", "RSI cross above 50", "H4 not bearish"]
+                    logger.info(
+                        "Pattern detected for %s: break_of_structure_reversal BUY "
+                        "quality [0.68-0.83] conditions: %s",
+                        pair,
+                        conds,
+                    )
+                    return {
+                        "pattern_detected": True,
+                        "pattern_name": "break_of_structure_reversal",
+                        "pattern_direction": "BUY",
+                        "quality_floor": 0.68,
+                        "quality_ceiling": 0.83,
+                        "conditions_met": conds,
+                    }
+            if bearish_bos and h4_structure != "bullish":
+                rsi_cross_below = rsi_1 < 50 and rsi_2 >= 50
+                if rsi_cross_below:
+                    conds = ["prior downtrend ll_lh", "BOS bearish", "RSI cross below 50", "H4 not bullish"]
+                    logger.info(
+                        "Pattern detected for %s: break_of_structure_reversal SELL "
+                        "quality [0.68-0.83] conditions: %s",
+                        pair,
+                        conds,
+                    )
+                    return {
+                        "pattern_detected": True,
+                        "pattern_name": "break_of_structure_reversal",
+                        "pattern_direction": "SELL",
+                        "quality_floor": 0.68,
+                        "quality_ceiling": 0.83,
+                        "conditions_met": conds,
+                    }
+
+    # --- 4. asian_range_breakout ---
+    asian_highs: list[float] = []
+    asian_lows: list[float] = []
+    for i, c in enumerate(candles):
+        t = c.get("time")
+        if not t:
+            continue
+        try:
+            s = str(t).replace("Z", "+00:00").split(".")[0]
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            hour = dt.hour
+            if hour >= 22 or hour <= 7:
+                asian_highs.append(normalized[i]["high"])
+                asian_lows.append(normalized[i]["low"])
+        except (ValueError, TypeError, IndexError):
+            continue
+
+    if asian_highs and asian_lows:
+        asian_high = max(asian_highs)
+        asian_low = min(asian_lows)
+        asian_range = asian_high - asian_low
+        if asian_range > atr_val * 0.3:
+            now_hour = 12
+            try:
+                last_t = candles[-1].get("time")
+                if last_t:
+                    s = str(last_t).replace("Z", "+00:00").split(".")[0]
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    now_hour = dt.hour
+            except (ValueError, TypeError):
+                pass
+
+            in_valid_window = 7 <= now_hour <= 16
+            if in_valid_window:
+                bullish_break = current_price > asian_high + (atr_val * 0.1)
+                bearish_break = current_price < asian_low - (atr_val * 0.1)
+                body = abs(c1 - o1)
+                candle_range = h1 - l1 if h1 > l1 else 0.0001
+                strong_candle = body / candle_range > 0.6 if candle_range > 0 else False
+
+                if bullish_break and strong_candle and h4_structure != "bearish":
+                    conds = ["asian range valid", "bullish breakout", "strong candle", "London/NY window", "H4 not bearish"]
+                    logger.info(
+                        "Pattern detected for %s: asian_range_breakout BUY "
+                        "quality [0.68-0.82] conditions: %s",
+                        pair,
+                        conds,
+                    )
+                    return {
+                        "pattern_detected": True,
+                        "pattern_name": "asian_range_breakout",
+                        "pattern_direction": "BUY",
+                        "quality_floor": 0.68,
+                        "quality_ceiling": 0.82,
+                        "conditions_met": conds,
+                    }
+                if bearish_break and strong_candle and h4_structure != "bullish":
+                    conds = ["asian range valid", "bearish breakout", "strong candle", "London/NY window", "H4 not bullish"]
+                    logger.info(
+                        "Pattern detected for %s: asian_range_breakout SELL "
+                        "quality [0.68-0.82] conditions: %s",
+                        pair,
+                        conds,
+                    )
+                    return {
+                        "pattern_detected": True,
+                        "pattern_name": "asian_range_breakout",
+                        "pattern_direction": "SELL",
+                        "quality_floor": 0.68,
+                        "quality_ceiling": 0.82,
+                        "conditions_met": conds,
+                    }
+
+    logger.debug("No pattern matched for %s", pair)
+    return _no_pattern_result()

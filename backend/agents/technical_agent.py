@@ -29,6 +29,7 @@ from agents.indicators import (
     analyse_timeframes,
     calculate_indicators,
     calculate_levels,
+    detect_patterns,
     detect_structure,
 )
 
@@ -200,6 +201,14 @@ Structure Bias: {structure.get("structure_bias", "neutral")}
             "structure": structure,
             "mtf": mtf,
             "levels": _level_cache.get(pair) or {},
+            "patterns": {
+                "pattern_detected": False,
+                "pattern_name": "no_pattern",
+                "pattern_direction": "NEUTRAL",
+                "quality_floor": 0.0,
+                "quality_ceiling": 1.0,
+                "conditions_met": [],
+            },
         }
         _log_health("technical_agent", "ok")
         return {
@@ -241,6 +250,27 @@ ATR Used:    {calculated_levels["atr_used"]}
         except (ValueError, TypeError) as e:
             logger.warning("calculate_levels failed: %s", e)
 
+    # Week 6: detect_patterns after MTF gate and calculate_levels
+    patterns = detect_patterns(
+        candles=candles,
+        indicators=indicators,
+        structure=structure,
+        mtf=mtf,
+        pair=pair,
+    )
+
+    # Build pattern block (only when pattern detected)
+    pattern_facts = ""
+    if patterns.get("pattern_detected") is True:
+        pattern_facts = f"""--- PATTERN DETECTION (coded rules, not estimated) ---
+Pattern Identified:  {patterns.get("pattern_name", "unknown")}
+Direction Signal:    {patterns.get("pattern_direction", "NEUTRAL")}
+Quality Range:       {patterns.get("quality_floor", 0)} — {patterns.get("quality_ceiling", 1)}
+Conditions Met:      {", ".join(patterns.get("conditions_met", []))}
+------------------------------------------------------
+
+"""
+
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
     docs = retrieve_documents(query, top_k=TOP_K)
@@ -269,6 +299,31 @@ The R:R ratio is fixed at 1:2 — do not change it.
 Your job is setup name, direction, and quality score only.
 """
 
+    pattern_instruction = ""
+    if pattern_facts:
+        pattern_instruction = """
+If and only if the PATTERN DETECTION block is present:
+Direction law:
+- pattern_direction is determined by coded rules
+- If pattern_direction = BUY you must output BUY
+- If pattern_direction = SELL you must output SELL
+- You cannot override coded pattern direction
+
+Quality law:
+- Your quality score must be >= quality_floor
+- Your quality score must be <= quality_ceiling
+- You cannot score outside this range for any reason
+
+Setup name law:
+- Use pattern_name exactly as provided
+- Do not rename, generalise, or modify it
+
+If no PATTERN DETECTION block is present:
+- Determine setup name and direction from other blocks
+- Use full quality range as before
+- System works exactly as Weeks 1-5
+"""
+
     prompt = f"""You are a forex technical analyst. Given the calculated technical indicators and market pattern descriptions, identify the setup forming and direction.
 
 Pair: {pair}
@@ -278,6 +333,7 @@ Pair: {pair}
 {structure_facts}
 
 {mtf_facts}
+{pattern_facts}
 {levels_facts}
 
 Market pattern library:
@@ -298,6 +354,7 @@ Quality rules:
 - timeframe_alignment = partial → quality ceiling is 0.75
 - timeframe_alignment = conflict → this block will never reach you
 {levels_instruction}
+{pattern_instruction}
 Rules you must follow:
 - If structure_bias = bullish → direction should be BUY unless RSI is overbought
 - If structure_bias = bearish → direction should be SELL unless RSI is oversold
@@ -340,6 +397,7 @@ Respond with valid JSON only, no other text:
             "structure": structure,
             "mtf": mtf,
             "levels": _level_cache.get(pair) or {},
+            "patterns": patterns,
         }
         _log_health("technical_agent", "ok")
         return {
