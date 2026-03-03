@@ -355,6 +355,16 @@ uvicorn main:app --reload --port 8000
 
 # Streamlit UI
 streamlit run streamlit_app.py
+
+# Run unit tests (62 tests, excludes integration)
+cd backend && python -m pytest tests/ -v
+
+# Run Week 2 integration test (live OANDA + LLM)
+cd backend && python -m pytest tests/test_week2_integration.py -v -s
+# Or: cd backend && python tests/test_week2_integration.py
+
+# Run with coverage
+cd backend && python -m pytest tests/ -m "not integration" --cov=agents --cov=evals --cov-report=term-missing
 ```
 
 ---

@@ -18,6 +18,10 @@ langgraph
 langfuse
 ragas
 
+# Testing
+pytest>=7.0
+pytest-cov>=4.0
+
 # AI providers
 openai
 anthropic
