@@ -5,6 +5,7 @@ Pure logic, no external APIs. Critical for TechnicalAgent signal quality.
 import pytest
 
 from agents.indicators import (
+    analyse_timeframes,
     calculate_indicators,
     detect_structure,
     get_pair_pip_threshold,
@@ -117,3 +118,24 @@ class TestDetectStructure:
         indicators["ema_20"] = price + 0.03  # Within 0.05 for JPY
         result = detect_structure(sample_candles, indicators, pair="GBP/JPY")
         assert isinstance(result["at_ema_20"], bool)
+
+
+class TestAnalyseTimeframes:
+    """Multi-timeframe analysis — D1, H4, H1 alignment."""
+
+    def test_returns_all_keys(self, sample_candles: list[dict]) -> None:
+        h4 = sample_candles[:30]
+        d1 = sample_candles[:30]
+        result = analyse_timeframes(sample_candles, h4, d1, "AUD/USD")
+        assert "d1_bias" in result
+        assert "h4_structure" in result
+        assert "h1_direction" in result
+        assert "timeframe_alignment" in result
+        assert "conflict_detected" in result
+        assert "conflict_reason" in result
+        assert "tradeable" in result
+
+    def test_insufficient_candles_returns_neutral(self) -> None:
+        result = analyse_timeframes([], [], [], "AUD/USD")
+        assert result["d1_bias"] == "neutral"
+        assert result["h4_structure"] == "neutral"

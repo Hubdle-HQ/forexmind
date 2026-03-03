@@ -88,6 +88,35 @@ def fetch_candles(
     return candles
 
 
+def fetch_h4_candles(pair: str, count: int = 30) -> list[dict]:
+    """
+    Fetches H4 candles from OANDA for the given pair.
+    Same format as H1 fetcher: list of OHLCV dicts.
+    Uses same OANDA_API_KEY, OANDA_ACCOUNT_ID, OANDA_ENVIRONMENT from .env
+    Granularity = "H4"
+    Default 30 candles = ~5 days of H4 data
+    """
+    try:
+        return fetch_candles(pair, count=max(count, 10), granularity="H4")
+    except Exception as e:
+        logger.warning("fetch_h4_candles failed for %s: %s", pair, e)
+        raise
+
+
+def fetch_d1_candles(pair: str, count: int = 30) -> list[dict]:
+    """
+    Fetches D1 (daily) candles from OANDA for the given pair.
+    Same format as H1 fetcher: list of OHLCV dicts.
+    Granularity = "D"
+    Default 30 candles = 30 days of daily data
+    """
+    try:
+        return fetch_candles(pair, count=max(count, 10), granularity="D")
+    except Exception as e:
+        logger.warning("fetch_d1_candles failed for %s: %s", pair, e)
+        raise
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     candles = fetch_candles("AUD/USD", count=100, granularity="H1")

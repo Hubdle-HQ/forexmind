@@ -236,3 +236,157 @@ def detect_structure(
         logger.warning("detect_structure structure_bias failed: %s", e)
 
     return result
+
+
+MIN_MTF_CANDLES = 10
+
+
+def analyse_timeframes(
+    h1_candles: list[dict[str, Any]],
+    h4_candles: list[dict[str, Any]],
+    d1_candles: list[dict[str, Any]],
+    pair: str,
+) -> dict[str, Any]:
+    """
+    Analyses D1, H4, H1 candles independently.
+    Returns structured timeframe context.
+    ALL logic is coded rules — no LLM.
+
+    Returns:
+    {
+        "d1_bias": "bullish"|"bearish"|"neutral",
+        "d1_ema_trend": "bullish"|"bearish"|"neutral",
+        "h4_structure": "bullish"|"bearish"|"neutral",
+        "h4_ema_trend": "bullish"|"bearish"|"neutral",
+        "h1_direction": "bullish"|"bearish"|"neutral",
+        "timeframe_alignment": "full"|"partial"|"conflict",
+        "conflict_detected": bool,
+        "conflict_reason": str | None,
+        "tradeable": bool
+    }
+    """
+    result: dict[str, Any] = {
+        "d1_bias": "neutral",
+        "d1_ema_trend": "neutral",
+        "h4_structure": "neutral",
+        "h4_ema_trend": "neutral",
+        "h1_direction": "neutral",
+        "timeframe_alignment": "partial",
+        "conflict_detected": False,
+        "conflict_reason": None,
+        "tradeable": True,
+    }
+
+    pip_thresh = get_pair_pip_threshold(pair)
+    d1_neutral_thresh = pip_thresh * 0.4
+
+    # D1 bias (big picture trend)
+    try:
+        if len(d1_candles) >= MIN_MTF_CANDLES:
+            norm_d1 = [_normalize_candle(c) for c in d1_candles]
+            df_d1 = pd.DataFrame(norm_d1)
+            import pandas_ta as ta
+            ema20_d1 = ta.ema(df_d1["close"], length=20)
+            ema50_d1 = ta.ema(df_d1["close"], length=50)
+            if ema20_d1 is not None and ema50_d1 is not None and len(ema20_d1) > 0 and len(ema50_d1) > 0:
+                e20 = float(ema20_d1.iloc[-1])
+                e50 = float(ema50_d1.iloc[-1])
+                diff = abs(e20 - e50)
+                if diff <= d1_neutral_thresh:
+                    result["d1_bias"] = "neutral"
+                    result["d1_ema_trend"] = "neutral"
+                elif e20 > e50:
+                    result["d1_bias"] = "bullish"
+                    result["d1_ema_trend"] = "bullish"
+                else:
+                    result["d1_bias"] = "bearish"
+                    result["d1_ema_trend"] = "bearish"
+        else:
+            logger.warning("analyse_timeframes: D1 candles < %d, using neutral", MIN_MTF_CANDLES)
+    except Exception as e:
+        logger.warning("analyse_timeframes D1 failed: %s", e)
+
+    # H4 structure (setup context)
+    try:
+        if len(h4_candles) >= MIN_MTF_CANDLES:
+            norm_h4 = [_normalize_candle(c) for c in h4_candles]
+            df_h4 = pd.DataFrame(norm_h4)
+            import pandas_ta as ta
+            ema20_h4 = ta.ema(df_h4["close"], length=20)
+            rsi_h4 = ta.rsi(df_h4["close"], length=14)
+            last_close = float(df_h4["close"].iloc[-1])
+            if ema20_h4 is not None and len(ema20_h4) > 0 and pd.notna(ema20_h4.iloc[-1]):
+                e20 = float(ema20_h4.iloc[-1])
+                rsi_val = float(rsi_h4.iloc[-1]) if rsi_h4 is not None and len(rsi_h4) > 0 and pd.notna(rsi_h4.iloc[-1]) else 50.0
+                if e20 > last_close * 0.999 and rsi_val > 50:
+                    result["h4_structure"] = "bullish"
+                elif e20 < last_close * 1.001 and rsi_val < 50:
+                    result["h4_structure"] = "bearish"
+                else:
+                    result["h4_structure"] = "neutral"
+            if ema20_h4 is not None and len(ema20_h4) >= 3:
+                vals = [float(ema20_h4.iloc[i]) for i in range(-3, 0)]
+                if vals[0] < vals[1] < vals[2]:
+                    result["h4_ema_trend"] = "bullish"
+                elif vals[0] > vals[1] > vals[2]:
+                    result["h4_ema_trend"] = "bearish"
+        else:
+            logger.warning("analyse_timeframes: H4 candles < %d, using neutral", MIN_MTF_CANDLES)
+    except Exception as e:
+        logger.warning("analyse_timeframes H4 failed: %s", e)
+
+    # H1 direction (entry trigger)
+    try:
+        if len(h1_candles) >= 5:
+            norm_h1 = [_normalize_candle(c) for c in h1_candles]
+            last_close = norm_h1[-1]["close"]
+            open_5_ago = norm_h1[-5]["open"]
+            df_h1 = pd.DataFrame(norm_h1)
+            import pandas_ta as ta
+            atr_series = ta.atr(df_h1["high"], df_h1["low"], df_h1["close"], length=14)
+            h1_atr: float | None = None
+            if atr_series is not None and len(atr_series) > 0 and pd.notna(atr_series.iloc[-1]):
+                h1_atr = float(atr_series.iloc[-1])
+            diff = abs(last_close - open_5_ago)
+            if h1_atr is not None and diff <= h1_atr * 0.3:
+                result["h1_direction"] = "neutral"
+            elif last_close > open_5_ago:
+                result["h1_direction"] = "bullish"
+            else:
+                result["h1_direction"] = "bearish"
+    except Exception as e:
+        logger.warning("analyse_timeframes H1 direction failed: %s", e)
+
+    # Conflict detection (STRICT)
+    d1_bias = result["d1_bias"]
+    h4_structure = result["h4_structure"]
+    h1_direction = result["h1_direction"]
+
+    if d1_bias == "bullish" and h4_structure == "bearish":
+        result["conflict_detected"] = True
+        result["conflict_reason"] = "D1 bullish but H4 bearish — opposing structure"
+    elif d1_bias == "bearish" and h4_structure == "bullish":
+        result["conflict_detected"] = True
+        result["conflict_reason"] = "D1 bearish but H4 bullish — opposing structure"
+    elif d1_bias == "bullish" and h1_direction == "bearish" and h4_structure != "bullish":
+        result["conflict_detected"] = True
+        result["conflict_reason"] = "D1 bullish but H1 bearish — H4 not confirming"
+    elif d1_bias == "bearish" and h1_direction == "bullish" and h4_structure != "bearish":
+        result["conflict_detected"] = True
+        result["conflict_reason"] = "D1 bearish but H1 bullish — H4 not confirming"
+
+    # Timeframe alignment
+    if result["conflict_detected"]:
+        result["timeframe_alignment"] = "conflict"
+        result["tradeable"] = False
+    else:
+        directions = [d1_bias, h4_structure, h1_direction]
+        bull_count = sum(1 for d in directions if d == "bullish")
+        bear_count = sum(1 for d in directions if d == "bearish")
+        if bull_count == 3 or bear_count == 3:
+            result["timeframe_alignment"] = "full"
+        else:
+            result["timeframe_alignment"] = "partial"
+        result["tradeable"] = True
+
+    return result

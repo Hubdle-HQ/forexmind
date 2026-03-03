@@ -23,9 +23,9 @@ load_dotenv(_backend.parent / ".env")
 
 from db.supabase_client import get_supabase
 from rag.ingest import ingest_document, retrieve_documents
-from rag.sources.price_data import fetch_candles
+from rag.sources.price_data import fetch_candles, fetch_d1_candles, fetch_h4_candles
 
-from agents.indicators import calculate_indicators, detect_structure
+from agents.indicators import analyse_timeframes, calculate_indicators, detect_structure
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,41 @@ Price at EMA20 (pullback zone): {structure.get("at_ema_20", False)}
 Structure Bias: {structure.get("structure_bias", "neutral")}
 --------------------------------------------------------"""
 
+    # Fetch H4 and D1 for multi-timeframe analysis
+    h4_candles: list[dict] = []
+    d1_candles: list[dict] = []
+    try:
+        h4_candles = fetch_h4_candles(pair, count=30)
+    except Exception as e:
+        logger.warning("TechnicalAgent: H4 fetch failed: %s — using empty", e)
+    try:
+        d1_candles = fetch_d1_candles(pair, count=30)
+    except Exception as e:
+        logger.warning("TechnicalAgent: D1 fetch failed: %s — using empty", e)
+
+    mtf = analyse_timeframes(candles, h4_candles, d1_candles, pair)
+
+    # HARD GATE — MTF conflict: no LLM call
+    if mtf.get("conflict_detected") is True:
+        logger.warning(
+            "MTF conflict for %s: %s — returning NEUTRAL, no LLM call",
+            pair,
+            mtf.get("conflict_reason", "unknown"),
+        )
+        _log_health("technical_agent", "ok")
+        return {
+            "setup": "no_setup",
+            "direction": "NEUTRAL",
+            "quality": 0.0,
+        }
+
+    mtf_facts = f"""--- MULTI-TIMEFRAME CONTEXT (coded, not estimated) ---
+D1 Bias (big trend):    {mtf.get("d1_bias", "neutral")} | EMA Trend: {mtf.get("d1_ema_trend", "neutral")}
+H4 Structure (setup):   {mtf.get("h4_structure", "neutral")} | EMA Trend: {mtf.get("h4_ema_trend", "neutral")}
+H1 Direction (entry):   {mtf.get("h1_direction", "neutral")}
+Timeframe Alignment:    {mtf.get("timeframe_alignment", "partial")}
+------------------------------------------------------"""
+
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
     docs = retrieve_documents(query, top_k=TOP_K)
@@ -186,11 +221,25 @@ Pair: {pair}
 
 {structure_facts}
 
+{mtf_facts}
+
 Market pattern library:
 {pattern_context}
 {macro_hint}
 
 You are receiving pre-calculated technical facts and coded structure detection results. Do NOT second-guess these numbers — they are mathematically calculated. Your job is to synthesise them into a setup name, direction, and quality score.
+
+Timeframe alignment is pre-calculated using coded rules. You cannot override it.
+
+Direction law — you must follow these without exception:
+- If d1_bias = bullish → you may only generate BUY or NEUTRAL
+- If d1_bias = bearish → you may only generate SELL or NEUTRAL
+- If d1_bias = neutral → either direction allowed
+
+Quality rules:
+- timeframe_alignment = full → quality floor is 0.70
+- timeframe_alignment = partial → quality ceiling is 0.75
+- timeframe_alignment = conflict → this block will never reach you
 
 Rules you must follow:
 - If structure_bias = bullish → direction should be BUY unless RSI is overbought
