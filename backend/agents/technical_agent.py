@@ -25,7 +25,7 @@ from db.supabase_client import get_supabase
 from rag.ingest import ingest_document, retrieve_documents
 from rag.sources.price_data import fetch_candles
 
-from agents.indicators import calculate_indicators
+from agents.indicators import calculate_indicators, detect_structure
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,16 @@ ATR(14): {atr_str}
 Candles analysed: {indicators.get("candle_count", 0)} H1 candles
 ----------------------------------------------------"""
 
+    structure = detect_structure(candles, indicators, pair=pair)
+    structure_facts = f"""--- STRUCTURE DETECTION (coded rules, not estimated) ---
+Higher Highs/Higher Lows: {structure.get("hh_hl", False)}
+Lower Lows/Lower Highs: {structure.get("ll_lh", False)}
+EMA Cross: {structure.get("ema_cross", "none")}
+Broke Asian Range: {structure.get("broke_asian_range", "none")}
+Price at EMA20 (pullback zone): {structure.get("at_ema_20", False)}
+Structure Bias: {structure.get("structure_bias", "neutral")}
+--------------------------------------------------------"""
+
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
     docs = retrieve_documents(query, top_k=TOP_K)
@@ -174,12 +184,28 @@ Pair: {pair}
 
 {technical_facts}
 
+{structure_facts}
+
 Market pattern library:
 {pattern_context}
 {macro_hint}
 
+You are receiving pre-calculated technical facts and coded structure detection results. Do NOT second-guess these numbers — they are mathematically calculated. Your job is to synthesise them into a setup name, direction, and quality score.
+
+Rules you must follow:
+- If structure_bias = bullish → direction should be BUY unless RSI is overbought
+- If structure_bias = bearish → direction should be SELL unless RSI is oversold
+- If structure_bias = neutral → quality score must be below 0.65
+- If broke_asian_range = up → this is a breakout setup, name it 'asian range breakout'
+- If at_ema_20 = True AND hh_hl = True → this is a 'trend continuation pullback'
+- If ema_cross = bullish → this is an 'ema crossover' setup
+- Quality score must reflect how many signals align:
+  1 signal aligns = 0.55-0.65
+  2 signals align = 0.65-0.75
+  3+ signals align = 0.75-0.90
+
 Answer:
-1. What setup is forming? (e.g. London breakout, mean reversion, trend continuation, range breakout, news spike fade, or none/unknown)
+1. What setup is forming? (e.g. London breakout, mean reversion, trend continuation, range breakout, news spike fade, asian range breakout, trend continuation pullback, ema crossover, or none/unknown)
 2. What direction? BUY or SELL (or NEUTRAL if no clear bias)
 3. Confidence score 0 to 1 (how confident are you in this setup?)
 
