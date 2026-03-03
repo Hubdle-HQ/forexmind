@@ -7,7 +7,9 @@ Uses OpenAI text-embedding-3-small (1536 dims) for embeddings.
 
 import json
 import logging
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -79,6 +81,172 @@ def retrieve_documents(query: str, top_k: int = 5) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def build_pattern_text(signal_data: dict, technical_context: dict) -> str:
+    """
+    Builds a plain English description of a trading pattern
+    for embedding and future RAG retrieval (Week 5B).
+
+    This function stores memory only.
+    It does not influence any signal, quality score, or LLM prompt.
+
+    Args:
+        signal_data: dict from signal_outcomes row
+        technical_context: dict with indicators, structure, mtf keys
+
+    Returns:
+        str: plain English pattern description under 300 words
+    """
+    pair = str(signal_data.get("pair", "unknown"))
+    direction = str(signal_data.get("direction", "unknown"))
+    setup = str(signal_data.get("setup", technical_context.get("setup", "unknown")))
+    entry = signal_data.get("entry") or signal_data.get("entry_price") or 0
+    sl = signal_data.get("sl") or signal_data.get("stop_loss") or 0
+    tp = signal_data.get("tp") or signal_data.get("take_profit") or 0
+    rr = signal_data.get("risk_reward") or 2.0
+
+    ind = technical_context.get("indicators") or {}
+    struct = technical_context.get("structure") or {}
+    mtf = technical_context.get("mtf") or {}
+    levels = technical_context.get("levels") or {}
+
+    rsi_val = ind.get("rsi_14")
+    rsi_zone = ind.get("rsi_zone", "unknown")
+    rsi_str = f"{rsi_zone} ({rsi_val})" if rsi_val is not None else rsi_zone
+
+    session = str(signal_data.get("session", technical_context.get("session", "unknown")))
+    d1_bias = str(mtf.get("d1_bias", "unknown"))
+    h4_structure = str(mtf.get("h4_structure", "unknown"))
+    timeframe_alignment = str(mtf.get("timeframe_alignment", "unknown"))
+    ema_trend = str(ind.get("ema_trend", struct.get("ema_trend", "unknown")))
+    structure_bias = str(struct.get("structure_bias", "unknown"))
+    broke_asian_range = str(struct.get("broke_asian_range", "none"))
+    atr_used = levels.get("atr_used") or ind.get("atr_14") or 0
+
+    if not entry and levels:
+        entry = levels.get("entry_price", 0)
+    if not sl and levels:
+        sl = levels.get("stop_loss", 0)
+    if not tp and levels:
+        tp = levels.get("take_profit", 0)
+    if not rr and levels:
+        rr = levels.get("risk_reward_ratio", 2.0)
+
+    return (
+        f"{pair} {direction} signal. Setup: {setup}. "
+        f"Session: {session}. D1 bias {d1_bias}, H4 structure {h4_structure}. "
+        f"Timeframe alignment {timeframe_alignment}. "
+        f"RSI zone {rsi_str}. EMA trend {ema_trend}. "
+        f"Structure bias {structure_bias}. Asian range: {broke_asian_range} broken. "
+        f"ATR {atr_used}. Entry {entry}, SL {sl}, TP {tp}, R:R 1:{int(rr)}."
+    )
+
+
+def embed_and_store_pattern(
+    signal_outcomes_id: int,
+    signal_data: dict,
+    technical_context: dict,
+    outcome: str,
+    pips_result: float,
+) -> bool:
+    """
+    Builds pattern text, embeds with OpenAI,
+    inserts into pattern_outcomes table.
+
+    Called by signal_evaluator.py after resolution only.
+    Never called during signal generation.
+    Never influences trading decisions.
+
+    Args:
+        signal_outcomes_id: id from signal_outcomes row
+        signal_data: full resolved row from signal_outcomes
+        technical_context: stored at signal creation time
+        outcome: "win" | "loss" | "expired"
+        pips_result: actual pips result from resolution
+
+    Returns:
+        bool: True if stored successfully, False if failed
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("embed_and_store_pattern: OPENAI_API_KEY not set")
+        return False
+
+    try:
+        pattern_text = build_pattern_text(signal_data, technical_context)
+    except Exception as e:
+        logger.error("build_pattern_text failed: %s", e)
+        return False
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.embeddings.create(model=EMBEDDING_MODEL, input=pattern_text)
+        embedding = response.data[0].embedding
+    except Exception as e:
+        logger.error("embed_and_store_pattern: embedding failed: %s", e)
+        return False
+
+    ind = technical_context.get("indicators") or {}
+    struct = technical_context.get("structure") or {}
+    mtf = technical_context.get("mtf") or {}
+    levels = technical_context.get("levels") or {}
+
+    entry = float(signal_data.get("entry") or signal_data.get("entry_price") or 0)
+    sl = float(signal_data.get("sl") or signal_data.get("stop_loss") or 0)
+    tp = float(signal_data.get("tp") or signal_data.get("take_profit") or 0)
+    rr = float(signal_data.get("risk_reward") or levels.get("risk_reward_ratio", 2.0))
+
+    hit_tp = signal_data.get("hit_tp")
+    hit_sl = signal_data.get("hit_sl")
+
+    row = {
+        "signal_outcomes_id": signal_outcomes_id,
+        "pair": str(signal_data.get("pair", "unknown")),
+        "direction": str(signal_data.get("direction", "unknown")),
+        "setup": str(signal_data.get("setup", technical_context.get("setup", "unknown"))),
+        "session": str(signal_data.get("session", technical_context.get("session", "unknown"))),
+        "d1_bias": str(mtf.get("d1_bias")) if mtf.get("d1_bias") else None,
+        "h4_structure": str(mtf.get("h4_structure")) if mtf.get("h4_structure") else None,
+        "timeframe_alignment": str(mtf.get("timeframe_alignment")) if mtf.get("timeframe_alignment") else None,
+        "rsi_zone": str(ind.get("rsi_zone")) if ind.get("rsi_zone") else None,
+        "ema_trend": str(ind.get("ema_trend")) if ind.get("ema_trend") else None,
+        "structure_bias": str(struct.get("structure_bias")) if struct.get("structure_bias") else None,
+        "broke_asian_range": str(struct.get("broke_asian_range")) if struct.get("broke_asian_range") else None,
+        "atr_used": float(levels.get("atr_used") or ind.get("atr_14") or 0),
+        "entry_price": entry,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "risk_reward": rr,
+        "outcome": outcome,
+        "pips_result": pips_result,
+        "hit_tp": hit_tp,
+        "hit_sl": hit_sl,
+        "embedding": embedding,
+        "pattern_text": pattern_text,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        supabase = get_supabase()
+        supabase.table("pattern_outcomes").insert(row).execute()
+    except Exception as e:
+        logger.error("embed_and_store_pattern: insert failed: %s", e)
+        return False
+
+    try:
+        result = supabase.table("pattern_outcomes").select("id", count="exact").execute()
+        pattern_count = getattr(result, "count", None) or len(result.data or [])
+        if pattern_count in [50, 100, 200]:
+            logger.info(
+                "Pattern RAG milestone reached: %d patterns stored. "
+                "Week 5B retrieval activation threshold: 100 patterns.",
+                pattern_count,
+            )
+    except Exception:
+        pass
+
+    return True
 
 
 # --- Test documents (RBA, interest rates, AUD) ---

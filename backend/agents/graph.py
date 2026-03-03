@@ -24,7 +24,7 @@ load_dotenv(_backend.parent / ".env")
 from agents.coach_agent import run_coach_agent
 from agents.macro_agent import run_macro_agent
 from agents.signal_agent import run_signal_agent
-from agents.technical_agent import run_technical_agent
+from agents.technical_agent import run_technical_agent, _technical_context_cache
 from agents.journal_agent import run_journal_agent
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class ForexState(TypedDict, total=False):
     pair: str
     macro_sentiment: Optional[dict]
     technical_setup: Optional[dict]
+    technical_context: Optional[dict]
     user_patterns: Optional[dict]
     coach_advice: Optional[str]
     final_signal: Optional[dict]
@@ -62,12 +63,14 @@ def macro_node(state: ForexState) -> ForexState:
 
 
 def technical_node(state: ForexState) -> ForexState:
-    """Run TechnicalAgent, update technical_setup."""
+    """Run TechnicalAgent, update technical_setup and technical_context."""
     pair = state.get("pair", "AUD/USD")
     macro_sentiment = state.get("macro_sentiment")
     result = run_technical_agent(pair, macro_sentiment=macro_sentiment)
-    _log_state("technical", {**state, "technical_setup": result})
-    return {"technical_setup": result}
+    ctx = _technical_context_cache.get(pair) or {}
+    ctx = {**ctx, "setup": result.get("setup", "unknown")}
+    _log_state("technical", {**state, "technical_setup": result, "technical_context": ctx})
+    return {"technical_setup": result, "technical_context": ctx}
 
 
 def journal_node(state: ForexState) -> ForexState:

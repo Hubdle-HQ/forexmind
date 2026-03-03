@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 # Module-level cache for pre-calculated levels (keyed by pair)
 _level_cache: dict[str, dict] = {}
 
+# Module-level cache for technical context (indicators, structure, mtf, levels)
+# Used by graph to pass technical_context to state for pattern storage (Week 5A)
+_technical_context_cache: dict[str, dict] = {}
+
 MODEL = "gpt-4o-mini"
 TOP_K = 5
 PATTERN_SOURCE = "market_pattern_library"
@@ -191,6 +195,12 @@ Structure Bias: {structure.get("structure_bias", "neutral")}
             pair,
             mtf.get("conflict_reason", "unknown"),
         )
+        _technical_context_cache[pair] = {
+            "indicators": indicators,
+            "structure": structure,
+            "mtf": mtf,
+            "levels": _level_cache.get(pair) or {},
+        }
         _log_health("technical_agent", "ok")
         return {
             "setup": "no_setup",
@@ -325,6 +335,12 @@ Respond with valid JSON only, no other text:
         quality = float(result.get("quality", 0.5))
         quality = max(0.0, min(1.0, quality))
 
+        _technical_context_cache[pair] = {
+            "indicators": indicators,
+            "structure": structure,
+            "mtf": mtf,
+            "levels": _level_cache.get(pair) or {},
+        }
         _log_health("technical_agent", "ok")
         return {
             "setup": setup,

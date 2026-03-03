@@ -177,6 +177,111 @@ def run_daily_refresh_endpoint() -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/latest-signal")
+def latest_signal() -> dict:
+    """
+    Return the most recent signal_outcomes row (for verifying technical_context).
+    Use after generating a signal to check if technical_context was stored.
+    """
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("signal_outcomes")
+            .select("id, pair, direction, entry, tp, sl, generated_at, resolved_at, technical_context")
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = rows.data or []
+        if not data:
+            return {"message": "No signals in signal_outcomes"}
+        row = data[0]
+        ctx = row.get("technical_context")
+        has_ctx = bool(ctx and isinstance(ctx, dict) and len(ctx) > 0)
+        return {
+            "id": row.get("id"),
+            "pair": row.get("pair"),
+            "direction": row.get("direction"),
+            "generated_at": row.get("generated_at"),
+            "resolved_at": row.get("resolved_at"),
+            "technical_context_populated": has_ctx,
+            "technical_context": row.get("technical_context"),
+        }
+    except Exception as e:
+        logger.exception("latest-signal failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/signal-outcomes-status")
+def signal_outcomes_status() -> dict:
+    """
+    Diagnostic: counts of signal_outcomes by state.
+    Use to debug why signals aren't resolving.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        supabase = get_supabase()
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        timeout_cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+        timeout_str = timeout_cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Total
+        all_rows = supabase.table("signal_outcomes").select("id", count="exact").execute()
+        total = getattr(all_rows, "count", None) or len(all_rows.data or [])
+
+        # Unresolved (resolved_at IS NULL)
+        unresolved = (
+            supabase.table("signal_outcomes")
+            .select("id, pair, direction, entry, tp, sl, generated_at, resolved_at")
+            .is_("resolved_at", "null")
+            .execute()
+        )
+        unresolved_data = unresolved.data or []
+        unresolved_count = len(unresolved_data)
+
+        # Eligible for resolution: unresolved AND generated_at < 24h ago
+        eligible = [r for r in unresolved_data if r.get("generated_at") and r.get("generated_at") < cutoff_str]
+        eligible_count = len(eligible)
+
+        # Too fresh (generated < 24h ago, won't be picked up yet)
+        too_fresh = [r for r in unresolved_data if r.get("generated_at") and r.get("generated_at") >= cutoff_str]
+
+        # Old enough to expire (generated > 72h ago, will be marked expired)
+        can_expire = [r for r in eligible if r.get("generated_at") and r.get("generated_at") < timeout_str]
+
+        return {
+            "total": total,
+            "unresolved_count": unresolved_count,
+            "eligible_for_resolution": eligible_count,
+            "too_fresh_count": len(too_fresh),
+            "can_expire_count": len(can_expire),
+            "cutoff_24h": cutoff_str,
+            "cutoff_72h": timeout_str,
+            "sample_unresolved": unresolved_data[:5] if unresolved_data else [],
+        }
+    except Exception as e:
+        logger.exception("signal-outcomes-status failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/resolve-signals")
+def resolve_signals_endpoint() -> dict:
+    """
+    Run ONLY the signal evaluator (no scrapers, RAG, etc).
+    Use for testing resolution without full daily refresh.
+    """
+    try:
+        from evals.signal_evaluator import resolve_unresolved_signals
+
+        n = resolve_unresolved_signals()
+        return {"ok": True, "signals_resolved": n}
+    except Exception as e:
+        logger.exception("resolve-signals failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/signal-accuracy")
 def signal_accuracy() -> dict:
     """Return win rate from signal_outcomes (resolved signals only)."""

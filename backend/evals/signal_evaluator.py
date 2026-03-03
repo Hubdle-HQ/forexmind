@@ -164,13 +164,22 @@ def resolve_unresolved_signals() -> int:
     supabase = get_supabase()
     rows = (
         supabase.table("signal_outcomes")
-        .select("id, pair, direction, entry, tp, sl, generated_at, langfuse_trace_id")
+        .select("id, pair, direction, entry, tp, sl, generated_at, langfuse_trace_id, technical_context")
         .is_("resolved_at", "null")
         .lt("generated_at", cutoff_str)
         .execute()
     )
     data = rows.data or []
     resolved_count = 0
+
+    if not data:
+        logger.info(
+            "No unresolved signals to resolve (resolved_at IS NULL, generated_at < %s)",
+            cutoff_str,
+        )
+        return 0
+
+    logger.info("Resolving %d unresolved signal(s) (generated_at < %s)", len(data), cutoff_str)
 
     for row in data:
         row_id = row.get("id")
@@ -201,6 +210,24 @@ def resolve_unresolved_signals() -> int:
                     }).eq("id", row_id).execute()
                     resolved_count += 1
                     logger.info("Expired signal %s (no TP/SL hit within %dh)", row_id, RESOLVE_TIMEOUT_HOURS)
+                    # Week 5A: pattern memory storage for expired
+                    try:
+                        from rag.ingest import embed_and_store_pattern
+
+                        signal_row = {**row, "hit_tp": False, "hit_sl": False, "pips_result": 0.0}
+                        stored = embed_and_store_pattern(
+                            signal_outcomes_id=row_id,
+                            signal_data=signal_row,
+                            technical_context=row.get("technical_context") or {},
+                            outcome="expired",
+                            pips_result=0.0,
+                        )
+                        if stored:
+                            logger.info("Pattern stored (expired): %s %s", row.get("pair"), row.get("direction"))
+                        else:
+                            logger.warning("Pattern storage failed for expired %s — continuing", row_id)
+                    except Exception as e:
+                        logger.error("Pattern storage exception for expired %s: %s", row_id, e)
                 except Exception as e:
                     logger.exception("Failed to expire signal %s: %s", row_id, e)
             else:
@@ -219,6 +246,32 @@ def resolve_unresolved_signals() -> int:
             }).eq("id", row_id).execute()
             resolved_count += 1
             logger.info("Resolved signal %s: hit_tp=%s hit_sl=%s pips=%s", row_id, hit_tp, hit_sl, pips_result)
+
+            # Week 5A: pattern memory storage (non-blocking)
+            try:
+                from rag.ingest import embed_and_store_pattern
+
+                outcome_str = "win" if hit_tp else "loss" if hit_sl else "expired"
+                signal_row = {**row, "hit_tp": hit_tp, "hit_sl": hit_sl, "pips_result": pips_result}
+                stored = embed_and_store_pattern(
+                    signal_outcomes_id=row_id,
+                    signal_data=signal_row,
+                    technical_context=row.get("technical_context") or {},
+                    outcome=outcome_str,
+                    pips_result=pips_result,
+                )
+                if stored:
+                    logger.info(
+                        "Pattern stored: %s %s — outcome: %s (%s pips)",
+                        row.get("pair"),
+                        row.get("direction"),
+                        outcome_str,
+                        pips_result,
+                    )
+                else:
+                    logger.warning("Pattern storage failed for %s — continuing", row_id)
+            except Exception as e:
+                logger.error("Pattern storage exception for %s: %s", row_id, e)
 
             # Langfuse score logging (when langfuse_trace_id is available in schema)
             _log_langfuse_score(row_id, row, hit_tp)

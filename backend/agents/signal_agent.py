@@ -195,10 +195,10 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
         direction = str(technical.get("direction", "BUY")).upper()
         if direction not in ("BUY", "SELL"):
             direction = "BUY"
-        entry_price = float(levels["entry_price"])
-        take_profit = float(levels["take_profit"])
-        stop_loss = float(levels["stop_loss"])
-        risk_reward = float(levels["risk_reward_ratio"])
+        entry_price = float(levels.get("entry_price") or 0)
+        take_profit = float(levels.get("take_profit") or 0)
+        stop_loss = float(levels.get("stop_loss") or 0)
+        risk_reward = float(levels.get("risk_reward_ratio") or 2.0)
         confidence_pct = int(signal.get("confidence_percentage", 70))
         confidence_pct = max(0, min(100, confidence_pct))
         reasoning = str(signal.get("reasoning_summary", ""))
@@ -208,10 +208,10 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
         direction = str(signal.get("direction", "BUY")).upper()
         if direction not in ("BUY", "SELL"):
             direction = "BUY"
-        entry_price = float(signal.get("entry_price", 0))
-        take_profit = float(signal.get("take_profit", 0))
-        stop_loss = float(signal.get("stop_loss", 0))
-        risk_reward = float(signal.get("risk_reward_ratio", 1.5))
+        entry_price = float(signal.get("entry_price") or 0)
+        take_profit = float(signal.get("take_profit") or 0)
+        stop_loss = float(signal.get("stop_loss") or 0)
+        risk_reward = float(signal.get("risk_reward_ratio") or 1.5)
         confidence_pct = int(signal.get("confidence_percentage", 70))
         confidence_pct = max(0, min(100, confidence_pct))
         reasoning = str(signal.get("reasoning_summary", ""))
@@ -257,6 +257,7 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
             "pips_result": None,
             "generated_at": gen_at,
             "resolved_at": None,
+            "technical_context": state.get("technical_context") or {},
         }
         if trace_id:
             insert_data["langfuse_trace_id"] = trace_id
