@@ -7,6 +7,7 @@ import pytest
 from agents.indicators import (
     analyse_timeframes,
     calculate_indicators,
+    calculate_levels,
     detect_structure,
     get_pair_pip_threshold,
 )
@@ -139,3 +140,32 @@ class TestAnalyseTimeframes:
         result = analyse_timeframes([], [], [], "AUD/USD")
         assert result["d1_bias"] == "neutral"
         assert result["h4_structure"] == "neutral"
+
+
+class TestCalculateLevels:
+    """ATR-based SL/TP with fixed R:R."""
+
+    def test_buy_levels(self) -> None:
+        result = calculate_levels(entry_price=1.0, direction="BUY", atr=0.01, pair="EUR/USD")
+        assert result["stop_loss"] < result["entry_price"]
+        assert result["take_profit"] > result["entry_price"]
+        assert result["risk_reward_ratio"] == 2.0
+        assert result["sl_distance"] == 0.015
+        assert result["tp_distance"] == 0.03
+
+    def test_sell_levels(self) -> None:
+        result = calculate_levels(entry_price=1.0, direction="SELL", atr=0.01, pair="EUR/USD")
+        assert result["stop_loss"] > result["entry_price"]
+        assert result["take_profit"] < result["entry_price"]
+
+    def test_neutral_raises(self) -> None:
+        with pytest.raises(ValueError, match="BUY or SELL"):
+            calculate_levels(1.0, "NEUTRAL", 0.01, "EUR/USD")
+
+    def test_zero_atr_raises(self) -> None:
+        with pytest.raises(ValueError, match="atr must be"):
+            calculate_levels(1.0, "BUY", 0, "EUR/USD")
+
+    def test_jpy_decimals(self) -> None:
+        result = calculate_levels(entry_price=150.0, direction="BUY", atr=0.5, pair="USD/JPY")
+        assert result["pip_value"] == 75.0  # 0.75 / 0.01

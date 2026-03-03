@@ -26,6 +26,8 @@ load_dotenv(_backend.parent / ".env")
 from db.supabase_client import get_supabase
 from rag.sources.price_data import fetch_candles
 
+from agents.technical_agent import _level_cache
+
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o-mini"
@@ -70,7 +72,7 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def _build_prompt(state: dict[str, Any]) -> str:
+def _build_prompt(state: dict[str, Any], levels: dict[str, Any] | None = None) -> str:
     """Build prompt for structured signal generation."""
     pair = state.get("pair", "AUD/USD")
     macro = state.get("macro_sentiment") or {}
@@ -78,12 +80,41 @@ def _build_prompt(state: dict[str, Any]) -> str:
     user_patterns = state.get("user_patterns") or {}
     coach_advice = state.get("coach_advice") or ""
 
-    # Get current price from OANDA for realistic entry
+    if levels:
+        direction = technical.get("direction", "BUY")
+        if direction not in ("BUY", "SELL"):
+            direction = "BUY"
+        return f"""You are a forex signal generator. The entry, SL, TP and R:R have been pre-calculated mathematically.
+
+Pair: {pair}
+Entry: {levels["entry_price"]}
+Stop Loss: {levels["stop_loss"]}
+Take Profit: {levels["take_profit"]}
+R:R Ratio: 1:{int(levels["risk_reward_ratio"])}
+
+Macro: {macro.get('sentiment', 'neutral')} (confidence {macro.get('confidence', 0):.2f})
+Technical: {technical.get('setup', 'unknown')} {technical.get('direction', 'NEUTRAL')} (quality {technical.get('quality', 0):.2f})
+User mode: {user_patterns.get('mode', 'market_patterns')}
+
+Coach recommendation:
+{coach_advice}
+
+Your task is to provide:
+1. reasoning_summary: 1-2 sentence plain English explanation of why this signal was generated based on the technical and macro context
+2. confidence_percentage: integer 0-100 based on signal strength
+
+Respond with valid JSON only, no other text:
+{{
+  "reasoning_summary": "<brief string>",
+  "confidence_percentage": <int 0-100>
+}}"""
+
+    # Fallback: LLM estimates levels
     try:
         candles = fetch_candles(pair, count=1, granularity="H1")
         current_price = float(candles[-1]["c"]) if candles else 0.65
     except Exception:
-        current_price = 0.65  # fallback
+        current_price = 0.65
 
     return f"""You are a forex signal generator. Given the analysis below, produce a structured trade signal.
 
@@ -127,7 +158,14 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
     if not api_key:
         return {"final_signal": None, "error": "OPENAI_API_KEY not set"}
 
-    prompt = _build_prompt(state)
+    pair = str(state.get("pair", "AUD/USD"))
+    technical = state.get("technical_setup") or {}
+    levels = _level_cache.get(pair)
+
+    if levels is None:
+        logger.warning("Level cache miss for %s — LLM will estimate levels", pair)
+
+    prompt = _build_prompt(state, levels=levels)
     client = OpenAI(api_key=api_key)
 
     signal = None
@@ -152,19 +190,33 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
     if signal is None:
         return {"final_signal": None, "error": "Could not parse structured output"}
 
-    # Validate and normalize
-    pair = str(signal.get("pair", state.get("pair", "AUD/USD")))
-    direction = str(signal.get("direction", "BUY")).upper()
-    if direction not in ("BUY", "SELL"):
-        direction = "BUY"
-    entry_price = float(signal.get("entry_price", 0))
-    take_profit = float(signal.get("take_profit", 0))
-    stop_loss = float(signal.get("stop_loss", 0))
-    risk_reward = float(signal.get("risk_reward_ratio", 1.5))
-    confidence_pct = int(signal.get("confidence_percentage", 70))
-    confidence_pct = max(0, min(100, confidence_pct))
-    reasoning = str(signal.get("reasoning_summary", ""))
-    mode = str(signal.get("mode", "market_patterns"))
+    # Validate and normalize — use pre-calculated levels when available
+    if levels:
+        direction = str(technical.get("direction", "BUY")).upper()
+        if direction not in ("BUY", "SELL"):
+            direction = "BUY"
+        entry_price = float(levels["entry_price"])
+        take_profit = float(levels["take_profit"])
+        stop_loss = float(levels["stop_loss"])
+        risk_reward = float(levels["risk_reward_ratio"])
+        confidence_pct = int(signal.get("confidence_percentage", 70))
+        confidence_pct = max(0, min(100, confidence_pct))
+        reasoning = str(signal.get("reasoning_summary", ""))
+        mode = str(state.get("user_patterns", {}).get("mode", "market_patterns"))
+    else:
+        pair = str(signal.get("pair", pair))
+        direction = str(signal.get("direction", "BUY")).upper()
+        if direction not in ("BUY", "SELL"):
+            direction = "BUY"
+        entry_price = float(signal.get("entry_price", 0))
+        take_profit = float(signal.get("take_profit", 0))
+        stop_loss = float(signal.get("stop_loss", 0))
+        risk_reward = float(signal.get("risk_reward_ratio", 1.5))
+        confidence_pct = int(signal.get("confidence_percentage", 70))
+        confidence_pct = max(0, min(100, confidence_pct))
+        reasoning = str(signal.get("reasoning_summary", ""))
+        mode = str(signal.get("mode", "market_patterns"))
+
     if mode not in ("market_patterns", "personal_edge"):
         mode = "market_patterns"
 

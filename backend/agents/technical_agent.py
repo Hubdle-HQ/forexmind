@@ -25,9 +25,17 @@ from db.supabase_client import get_supabase
 from rag.ingest import ingest_document, retrieve_documents
 from rag.sources.price_data import fetch_candles, fetch_d1_candles, fetch_h4_candles
 
-from agents.indicators import analyse_timeframes, calculate_indicators, detect_structure
+from agents.indicators import (
+    analyse_timeframes,
+    calculate_indicators,
+    calculate_levels,
+    detect_structure,
+)
 
 logger = logging.getLogger(__name__)
+
+# Module-level cache for pre-calculated levels (keyed by pair)
+_level_cache: dict[str, dict] = {}
 
 MODEL = "gpt-4o-mini"
 TOP_K = 5
@@ -106,6 +114,9 @@ def run_technical_agent(pair: str, macro_sentiment: dict | None = None) -> dict:
     Fetch OANDA H1 candles, query RAG for pattern library, classify setup with GPT-4o Mini.
     Returns { setup, direction, quality }.
     """
+    # Clear level cache at start of each run (in-memory, per process)
+    _level_cache.clear()
+
     # Ensure pattern library exists
     _ensure_pattern_library()
 
@@ -194,6 +205,32 @@ H1 Direction (entry):   {mtf.get("h1_direction", "neutral")}
 Timeframe Alignment:    {mtf.get("timeframe_alignment", "partial")}
 ------------------------------------------------------"""
 
+    # ATR-based levels (only when structure_bias is bullish or bearish)
+    levels_facts = ""
+    structure_bias = structure.get("structure_bias", "neutral")
+    current_price = indicators.get("current_price") or 0.0
+    atr_val = indicators.get("atr_14")
+
+    if structure_bias in ("bullish", "bearish") and atr_val and float(atr_val) > 0:
+        direction_for_levels = "BUY" if structure_bias == "bullish" else "SELL"
+        try:
+            calculated_levels = calculate_levels(
+                entry_price=float(current_price),
+                direction=direction_for_levels,
+                atr=float(atr_val),
+                pair=pair,
+            )
+            _level_cache[pair] = calculated_levels
+            levels_facts = f"""--- PRE-CALCULATED LEVELS (mathematical, fixed R:R) ---
+Entry:       {calculated_levels["entry_price"]}
+Stop Loss:   {calculated_levels["stop_loss"]}  ({calculated_levels["pip_value"]:.1f} pips)
+Take Profit: {calculated_levels["take_profit"]}
+R:R Ratio:   1:{int(calculated_levels["risk_reward_ratio"])}
+ATR Used:    {calculated_levels["atr_used"]}
+--------------------------------------------------------"""
+        except (ValueError, TypeError) as e:
+            logger.warning("calculate_levels failed: %s", e)
+
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
     docs = retrieve_documents(query, top_k=TOP_K)
@@ -213,6 +250,15 @@ Timeframe Alignment:    {mtf.get("timeframe_alignment", "partial")}
     if macro_sentiment:
         macro_hint = f"\nMacro context: {macro_sentiment.get('sentiment', '')} (confidence {macro_sentiment.get('confidence', 0):.2f}). Use only as context, not as trading signal."
 
+    levels_instruction = ""
+    if levels_facts:
+        levels_instruction = """
+The SL and TP levels above are mathematically calculated using ATR. You must use these exact values in your output.
+Do not recalculate, adjust, or estimate SL/TP yourself.
+The R:R ratio is fixed at 1:2 — do not change it.
+Your job is setup name, direction, and quality score only.
+"""
+
     prompt = f"""You are a forex technical analyst. Given the calculated technical indicators and market pattern descriptions, identify the setup forming and direction.
 
 Pair: {pair}
@@ -222,6 +268,7 @@ Pair: {pair}
 {structure_facts}
 
 {mtf_facts}
+{levels_facts}
 
 Market pattern library:
 {pattern_context}
@@ -240,7 +287,7 @@ Quality rules:
 - timeframe_alignment = full → quality floor is 0.70
 - timeframe_alignment = partial → quality ceiling is 0.75
 - timeframe_alignment = conflict → this block will never reach you
-
+{levels_instruction}
 Rules you must follow:
 - If structure_bias = bullish → direction should be BUY unless RSI is overbought
 - If structure_bias = bearish → direction should be SELL unless RSI is oversold

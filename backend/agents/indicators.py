@@ -117,6 +117,79 @@ def get_pair_pip_threshold(pair: str) -> float:
     return 0.0005
 
 
+def calculate_levels(
+    entry_price: float,
+    direction: str,
+    atr: float,
+    pair: str,
+    atr_sl_multiplier: float = 1.5,
+    rr_ratio: float = 2.0,
+) -> dict[str, Any]:
+    """
+    Calculates mathematically correct SL and TP levels using ATR.
+    Guarantees fixed R:R ratio every time.
+
+    Rules:
+    - SL distance = ATR * atr_sl_multiplier (default 1.5x ATR)
+    - TP distance = SL distance * rr_ratio (default 2.0 = 1:2 R:R)
+    - BUY:  SL = entry - sl_distance, TP = entry + tp_distance
+    - SELL: SL = entry + sl_distance, TP = entry - tp_distance
+    - Round to correct decimal places: JPY pairs 3 decimals, others 5 decimals
+
+    Returns:
+    {
+        "entry_price": float,
+        "stop_loss": float,
+        "take_profit": float,
+        "sl_distance": float,
+        "tp_distance": float,
+        "risk_reward_ratio": float,
+        "atr_used": float,
+        "pip_value": float
+    }
+    """
+    if direction not in ("BUY", "SELL"):
+        raise ValueError(f"direction must be BUY or SELL, got {direction}")
+    if atr is None or float(atr) <= 0:
+        raise ValueError(f"atr must be > 0, got {atr}")
+
+    atr_f = float(atr)
+    sl_distance = atr_f * atr_sl_multiplier
+    tp_distance = sl_distance * rr_ratio
+
+    is_jpy = "JPY" in pair.upper()
+    decimals = 3 if is_jpy else 5
+    pip_size = 0.01 if is_jpy else 0.0001
+    pip_value = round(sl_distance / pip_size, 1)
+
+    if direction == "BUY":
+        stop_loss = round(entry_price - sl_distance, decimals)
+        take_profit = round(entry_price + tp_distance, decimals)
+    else:
+        stop_loss = round(entry_price + sl_distance, decimals)
+        take_profit = round(entry_price - tp_distance, decimals)
+
+    result = {
+        "entry_price": round(entry_price, decimals),
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "sl_distance": sl_distance,
+        "tp_distance": tp_distance,
+        "risk_reward_ratio": rr_ratio,
+        "atr_used": atr_f,
+        "pip_value": pip_value,
+    }
+    logger.info(
+        "ATR levels for %s: Entry %s SL %s TP %s R:R 1:%s",
+        pair,
+        result["entry_price"],
+        result["stop_loss"],
+        result["take_profit"],
+        int(rr_ratio),
+    )
+    return result
+
+
 def detect_structure(
     candles: list[dict[str, Any]],
     indicators: dict[str, Any],
