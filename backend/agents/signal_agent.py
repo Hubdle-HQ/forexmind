@@ -251,6 +251,7 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
             "entry": entry_price,
             "tp": take_profit,
             "sl": stop_loss,
+            "risk_reward": risk_reward,
             "hit_tp": None,
             "hit_sl": None,
             "pips_result": None,
@@ -259,7 +260,16 @@ def run_signal_agent(state: dict[str, Any]) -> dict[str, Any]:
         }
         if trace_id:
             insert_data["langfuse_trace_id"] = trace_id
-        get_supabase().table("signal_outcomes").insert(insert_data).execute()
+        try:
+            get_supabase().table("signal_outcomes").insert(insert_data).execute()
+        except Exception as insert_err:
+            err_str = str(insert_err)
+            if "risk_reward" in err_str and "schema" in err_str.lower():
+                # Column not yet added — run migration 002_add_risk_reward.sql
+                insert_data.pop("risk_reward", None)
+                get_supabase().table("signal_outcomes").insert(insert_data).execute()
+            else:
+                raise
         final_signal["signal_id"] = str(signal_id)
         logger.info("Saved signal to signal_outcomes: %s", signal_id)
     except Exception as e:
