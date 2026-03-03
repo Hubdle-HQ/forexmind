@@ -58,6 +58,7 @@ def fetch_candles(
     instrument = _normalize_instrument(pair)
     url = f"{base}/v3/instruments/{instrument}/candles"
 
+    count = max(count, 100)
     params = {
         "count": count,
         "granularity": granularity,

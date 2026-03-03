@@ -25,6 +25,8 @@ from db.supabase_client import get_supabase
 from rag.ingest import ingest_document, retrieve_documents
 from rag.sources.price_data import fetch_candles
 
+from agents.indicators import calculate_indicators
+
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o-mini"
@@ -119,7 +121,33 @@ def run_technical_agent(pair: str, macro_sentiment: dict | None = None) -> dict:
         _log_health("technical_agent", "failed", "No candle data")
         return {"setup": "unknown", "direction": "NEUTRAL", "quality": 0.0, "error": "No candles"}
 
-    price_context = _format_price_context(candles, last_n=10)
+    try:
+        indicators = calculate_indicators(candles)
+    except ValueError as e:
+        logger.error("TechnicalAgent: %s", e)
+        _log_health("technical_agent", "failed", str(e))
+        return {"setup": "unknown", "direction": "NEUTRAL", "quality": 0.0, "error": str(e)}
+
+    if not indicators:
+        _log_health("technical_agent", "failed", "Indicator calculation failed")
+        return {"setup": "unknown", "direction": "NEUTRAL", "quality": 0.0, "error": "Indicator calculation failed"}
+
+    # Build technical facts block for LLM
+    rsi = indicators.get("rsi_14")
+    rsi_str = f"{rsi}" if rsi is not None else "N/A"
+    ema20 = indicators.get("ema_20")
+    ema50 = indicators.get("ema_50")
+    ema20_str = f"{ema20:.5f}" if ema20 is not None else "N/A"
+    ema50_str = f"{ema50:.5f}" if ema50 is not None else "N/A"
+    atr = indicators.get("atr_14")
+    atr_str = f"{atr:.5f}" if atr is not None else "N/A"
+    technical_facts = f"""--- TECHNICAL FACTS (calculated, not estimated) ---
+Current Price: {indicators.get("current_price", 0):.5f}
+RSI(14): {rsi_str} → Zone: {indicators.get("rsi_zone", "neutral")}
+EMA20: {ema20_str} | EMA50: {ema50_str} → Trend: {indicators.get("ema_trend", "neutral")}
+ATR(14): {atr_str}
+Candles analysed: {indicators.get("candle_count", 0)} H1 candles
+----------------------------------------------------"""
 
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
@@ -140,12 +168,11 @@ def run_technical_agent(pair: str, macro_sentiment: dict | None = None) -> dict:
     if macro_sentiment:
         macro_hint = f"\nMacro context: {macro_sentiment.get('sentiment', '')} (confidence {macro_sentiment.get('confidence', 0):.2f}). Use only as context, not as trading signal."
 
-    prompt = f"""You are a forex technical analyst. Given the last 10 H1 candles and market pattern descriptions, identify the setup forming and direction.
+    prompt = f"""You are a forex technical analyst. Given the calculated technical indicators and market pattern descriptions, identify the setup forming and direction.
 
 Pair: {pair}
 
-Last 10 H1 candles (OHLCV):
-{price_context}
+{technical_facts}
 
 Market pattern library:
 {pattern_context}
