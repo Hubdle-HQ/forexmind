@@ -94,3 +94,26 @@ class TestCoachAgentGate:
         )
         assert result["should_trade"] is True
         assert "coaching_note" in result
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("agents.coach_agent.Anthropic")
+    def test_claude_no_trade_returns_rejection_reason(
+        self,
+        mock_anthropic: MagicMock,
+    ) -> None:
+        """When gate passes but Claude says NO TRADE, return rejection_reason for tracking."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text='{"coaching_note": "Neutral macro, no clear setup. NO TRADE. Wait for confluence.", "should_trade": false}')]
+        )
+        mock_anthropic.return_value = mock_client
+
+        result = run_coach_agent(
+            macro_sentiment={"sentiment": "neutral", "confidence": 0.85},
+            technical_setup={"setup": "unknown", "direction": "NEUTRAL", "quality": 0.60},
+            user_patterns={"mode": "market_patterns", "win_rate": 0.55, "pattern_notes": "OK", "trade_count": 20},
+            pair="AUD/USD",
+        )
+        assert result["should_trade"] is False
+        assert result["rejection_reason"] == "claude_no_trade"
+        assert "NO TRADE" in result["coaching_note"]

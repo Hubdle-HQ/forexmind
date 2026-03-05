@@ -212,6 +212,37 @@ def latest_signal() -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/signal-rejections-status")
+def signal_rejections_status() -> dict:
+    """
+    Diagnostic: verify signal_rejections table exists and show recent rejections.
+    If table missing, run migration 003_add_signal_rejections.sql in Supabase.
+    """
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("signal_rejections")
+            .select("id, pair, rejection_reason, rejected_at, technical_quality")
+            .order("rejected_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+        data = rows.data or []
+        return {
+            "ok": True,
+            "table_exists": True,
+            "total_recent": len(data),
+            "sample": data,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "table_exists": False,
+            "error": str(e),
+            "hint": "Run migration 003_add_signal_rejections.sql in Supabase SQL Editor.",
+        }
+
+
 @app.get("/signal-outcomes-status")
 def signal_outcomes_status() -> dict:
     """

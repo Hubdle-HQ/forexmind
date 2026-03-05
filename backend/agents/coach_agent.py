@@ -106,20 +106,20 @@ def run_coach_agent(
     if has_error:
         err_src = state_error or macro_sentiment.get("error") or technical_setup.get("error") or user_patterns.get("error")
         note = f"Gate failed: error in pipeline ({err_src}). Do not trade."
-        return {"coaching_note": note, "should_trade": False}
+        return {"coaching_note": note, "should_trade": False, "rejection_reason": "error_gate"}
     macro_sent = str(macro_sentiment.get("sentiment", "neutral")).lower()
     macro_passes = macro_conf > MACRO_CONFIDENCE_THRESHOLD or macro_sent == "neutral"
     if not macro_passes:
         note = f"Gate failed: macro confidence {macro_conf:.2f} is not above {MACRO_CONFIDENCE_THRESHOLD} and macro is not neutral. Do not trade."
-        return {"coaching_note": note, "should_trade": False}
+        return {"coaching_note": note, "should_trade": False, "rejection_reason": "macro_gate"}
     if tech_qual <= TECHNICAL_QUALITY_THRESHOLD:
         note = f"Gate failed: technical quality {tech_qual:.2f} is not above {TECHNICAL_QUALITY_THRESHOLD}. Do not trade."
-        return {"coaching_note": note, "should_trade": False}
+        return {"coaching_note": note, "should_trade": False, "rejection_reason": "technical_quality_gate"}
 
     # All conditions pass — call Claude
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        return {"coaching_note": "ANTHROPIC_API_KEY not set. Cannot generate recommendation.", "should_trade": False}
+        return {"coaching_note": "ANTHROPIC_API_KEY not set. Cannot generate recommendation.", "should_trade": False, "rejection_reason": "error_gate"}
 
     try:
         prompt = _build_prompt(pair, macro_sentiment, technical_setup, user_patterns)
@@ -135,13 +135,16 @@ def run_coach_agent(
         result = json.loads(text)
         note = result.get("coaching_note", "")
         should_trade = bool(result.get("should_trade", False))
-        return {"coaching_note": note, "should_trade": should_trade}
+        out = {"coaching_note": note, "should_trade": should_trade}
+        if not should_trade:
+            out["rejection_reason"] = "claude_no_trade"  # Track LLM reasoning for evaluation
+        return out
     except json.JSONDecodeError as e:
         logger.warning("CoachAgent: failed to parse Claude response: %s", e)
-        return {"coaching_note": f"Could not parse recommendation: {e}", "should_trade": False}
+        return {"coaching_note": f"Could not parse recommendation: {e}", "should_trade": False, "rejection_reason": "error_gate"}
     except Exception as e:
         logger.exception("CoachAgent failed: %s", e)
-        return {"coaching_note": f"Coach error: {e}", "should_trade": False}
+        return {"coaching_note": f"Coach error: {e}", "should_trade": False, "rejection_reason": "error_gate"}
 
 
 if __name__ == "__main__":

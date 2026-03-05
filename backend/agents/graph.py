@@ -2,7 +2,7 @@
 LangGraph StateGraph: ForexMind pipeline orchestrator.
 
 Flow: macro → technical → journal → coach → [gate] → signal → END
-                                            ↘ END (if should_trade = False)
+                                            ↘ log_rejection → END (if should_trade = False)
 """
 import logging
 import sys
@@ -26,6 +26,7 @@ from agents.macro_agent import run_macro_agent
 from agents.signal_agent import run_signal_agent
 from agents.technical_agent import run_technical_agent, _technical_context_cache
 from agents.journal_agent import run_journal_agent
+from db.signal_rejections import log_signal_rejection
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class ForexState(TypedDict, total=False):
     technical_context: Optional[dict]
     user_patterns: Optional[dict]
     coach_advice: Optional[str]
+    rejection_reason: Optional[str]
     final_signal: Optional[dict]
     should_trade: bool
     error: Optional[str]
@@ -100,8 +102,13 @@ def coach_agent_node(state: ForexState) -> ForexState:
     )
     coach_advice = result.get("coaching_note", "")
     should_trade = result.get("should_trade", False)
+    rejection_reason = result.get("rejection_reason")
     _log_state("coach", {**state, "coach_advice": coach_advice, "should_trade": should_trade})
-    return {"coach_advice": coach_advice, "should_trade": should_trade}
+    return {
+        "coach_advice": coach_advice,
+        "should_trade": should_trade,
+        "rejection_reason": rejection_reason,
+    }
 
 
 def signal_agent_node(state: ForexState) -> ForexState:
@@ -113,11 +120,47 @@ def signal_agent_node(state: ForexState) -> ForexState:
     return {"final_signal": final_signal, "error": error}
 
 
-def _route_after_coach(state: ForexState) -> Literal["signal", "__end__"]:
-    """Route to signal if should_trade, else END."""
+def log_rejection_node(state: ForexState) -> ForexState:
+    """Log gate failure or Claude NO TRADE to signal_rejections for evaluation. No state change."""
+    pair = state.get("pair", "AUD/USD")
+    rejection_reason = state.get("rejection_reason")
+    coach_advice = state.get("coach_advice")
+    macro_sentiment = state.get("macro_sentiment") or {}
+    technical_setup = state.get("technical_setup") or {}
+    user_patterns = state.get("user_patterns") or {}
+    technical_context = state.get("technical_context")
+
+    # Fallback: gate passed but Claude said no → claude_no_trade (handles older deployments)
+    if not rejection_reason:
+        rejection_reason = "claude_no_trade"
+
+    logger.info("log_rejection: pair=%s reason=%s", pair, rejection_reason)
+    if rejection_reason:
+        err_msg = (
+            state.get("error")
+            or macro_sentiment.get("error")
+            or technical_setup.get("error")
+            or user_patterns.get("error")
+        )
+        if err_msg is not None:
+            err_msg = str(err_msg)
+        log_signal_rejection(
+            pair=pair,
+            rejection_reason=rejection_reason,
+            rejection_details=coach_advice,
+            macro_sentiment=macro_sentiment,
+            technical_setup=technical_setup,
+            technical_context=technical_context,
+            error_message=err_msg,
+        )
+    return {}
+
+
+def _route_after_coach(state: ForexState) -> Literal["signal", "log_rejection"]:
+    """Route to signal if should_trade, else log_rejection."""
     if state.get("should_trade"):
         return "signal"
-    return "__end__"
+    return "log_rejection"
 
 
 def build_graph() -> CompiledStateGraph:
@@ -129,13 +172,15 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("journal", journal_node)
     graph.add_node("coach", coach_agent_node)
     graph.add_node("signal", signal_agent_node)
+    graph.add_node("log_rejection", log_rejection_node)
 
     graph.set_entry_point("macro")
     graph.add_edge("macro", "technical")
     graph.add_edge("technical", "journal")
     graph.add_edge("journal", "coach")
-    graph.add_conditional_edges("coach", _route_after_coach, {"signal": "signal", "__end__": END})
+    graph.add_conditional_edges("coach", _route_after_coach, {"signal": "signal", "log_rejection": "log_rejection"})
     graph.add_edge("signal", END)
+    graph.add_edge("log_rejection", END)
 
     return graph.compile()
 
