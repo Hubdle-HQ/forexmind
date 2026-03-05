@@ -553,9 +553,9 @@ def detect_patterns(
     if ema_trend == "bullish" and d1_bias == "bullish" and at_ema_20:
         o1, h1, l1, c1 = normalized[-1]["open"], normalized[-1]["high"], normalized[-1]["low"], normalized[-1]["close"]
         if ema_20 > 0:
-            touch = abs(l1 - ema_20) < atr_val * 0.3
-            if touch and c1 > o1 and 40 <= rsi_val <= 60:
-                conds = ["ema_trend bullish", "d1_bias bullish", "at_ema_20 True", "pullback rejection BUY", "RSI 40-60"]
+            touch = abs(l1 - ema_20) < atr_val * 0.5
+            if touch and c1 > o1 and 35 <= rsi_val <= 65:
+                conds = ["ema_trend bullish", "d1_bias bullish", "at_ema_20 True", "pullback rejection BUY", "RSI 35-65"]
                 logger.info(
                     "Pattern detected for %s: trend_continuation_ema_pullback BUY "
                     "quality [0.72-0.88] conditions: %s",
@@ -573,9 +573,9 @@ def detect_patterns(
     if ema_trend == "bearish" and d1_bias == "bearish" and at_ema_20:
         o1, h1, l1, c1 = normalized[-1]["open"], normalized[-1]["high"], normalized[-1]["low"], normalized[-1]["close"]
         if ema_20 > 0:
-            touch = abs(h1 - ema_20) < atr_val * 0.3
-            if touch and c1 < o1 and 40 <= rsi_val <= 60:
-                conds = ["ema_trend bearish", "d1_bias bearish", "at_ema_20 True", "pullback rejection SELL", "RSI 40-60"]
+            touch = abs(h1 - ema_20) < atr_val * 0.5
+            if touch and c1 < o1 and 35 <= rsi_val <= 65:
+                conds = ["ema_trend bearish", "d1_bias bearish", "at_ema_20 True", "pullback rejection SELL", "RSI 35-65"]
                 logger.info(
                     "Pattern detected for %s: trend_continuation_ema_pullback SELL "
                     "quality [0.72-0.88] conditions: %s",
@@ -736,8 +736,8 @@ def detect_patterns(
 
             in_valid_window = 7 <= now_hour <= 16
             if in_valid_window:
-                bullish_break = current_price > asian_high + (atr_val * 0.1)
-                bearish_break = current_price < asian_low - (atr_val * 0.1)
+                bullish_break = current_price > asian_high + (atr_val * 0.05)
+                bearish_break = current_price < asian_low - (atr_val * 0.05)
                 body = abs(c1 - o1)
                 candle_range = h1 - l1 if h1 > l1 else 0.0001
                 strong_candle = body / candle_range > 0.6 if candle_range > 0 else False

@@ -1,6 +1,7 @@
 """
 CoachAgent: Synthesises macro, technical, and user patterns into a trade recommendation.
-3-condition gate (all must pass): macro confidence > 0.5, technical quality > 0.6, no error in state.
+3-condition gate (all must pass): macro passes (strong macro OR neutral macro), technical quality > 0.55, no error.
+Relaxed: neutral macro + strong technical is allowed (was: strong macro + strong technical only).
 Model: Claude Sonnet.
 """
 import json
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 MODEL = os.getenv("COACH_MODEL", "claude-sonnet-4-6")
 MACRO_CONFIDENCE_THRESHOLD = 0.5
-TECHNICAL_QUALITY_THRESHOLD = 0.6
+TECHNICAL_QUALITY_THRESHOLD = 0.55
 
 
 def _build_prompt(
@@ -106,8 +107,10 @@ def run_coach_agent(
         err_src = state_error or macro_sentiment.get("error") or technical_setup.get("error") or user_patterns.get("error")
         note = f"Gate failed: error in pipeline ({err_src}). Do not trade."
         return {"coaching_note": note, "should_trade": False}
-    if macro_conf <= MACRO_CONFIDENCE_THRESHOLD:
-        note = f"Gate failed: macro confidence {macro_conf:.2f} is not above {MACRO_CONFIDENCE_THRESHOLD}. Do not trade."
+    macro_sent = str(macro_sentiment.get("sentiment", "neutral")).lower()
+    macro_passes = macro_conf > MACRO_CONFIDENCE_THRESHOLD or macro_sent == "neutral"
+    if not macro_passes:
+        note = f"Gate failed: macro confidence {macro_conf:.2f} is not above {MACRO_CONFIDENCE_THRESHOLD} and macro is not neutral. Do not trade."
         return {"coaching_note": note, "should_trade": False}
     if tech_qual <= TECHNICAL_QUALITY_THRESHOLD:
         note = f"Gate failed: technical quality {tech_qual:.2f} is not above {TECHNICAL_QUALITY_THRESHOLD}. Do not trade."
