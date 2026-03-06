@@ -112,8 +112,8 @@ def run_coach_agent(
     if not macro_passes:
         note = f"Gate failed: macro confidence {macro_conf:.2f} is not above {MACRO_CONFIDENCE_THRESHOLD} and macro is not neutral. Do not trade."
         return {"coaching_note": note, "should_trade": False, "rejection_reason": "macro_gate"}
-    if tech_qual <= TECHNICAL_QUALITY_THRESHOLD:
-        note = f"Gate failed: technical quality {tech_qual:.2f} is not above {TECHNICAL_QUALITY_THRESHOLD}. Do not trade."
+    if tech_qual < TECHNICAL_QUALITY_THRESHOLD:
+        note = f"Gate failed: technical quality {tech_qual:.2f} is below {TECHNICAL_QUALITY_THRESHOLD}. Do not trade."
         return {"coaching_note": note, "should_trade": False, "rejection_reason": "technical_quality_gate"}
 
     # All conditions pass — call Claude

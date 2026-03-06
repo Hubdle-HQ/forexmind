@@ -30,7 +30,29 @@ class TestCoachAgentGate:
             pair="AUD/USD",
         )
         assert result["should_trade"] is False
-        assert "0.6" in result["coaching_note"] or "quality" in result["coaching_note"].lower()
+        assert "0.55" in result["coaching_note"] or "quality" in result["coaching_note"].lower()
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("agents.coach_agent.Anthropic")
+    def test_gate_pass_technical_quality_at_threshold(
+        self,
+        mock_anthropic: MagicMock,
+    ) -> None:
+        """Quality 0.55 (at threshold) now passes — >= 0.55."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text='{"coaching_note": "Asian breakout, confluence. TRADE.", "should_trade": true}')]
+        )
+        mock_anthropic.return_value = mock_client
+
+        result = run_coach_agent(
+            macro_sentiment={"sentiment": "dovish", "confidence": 0.85},
+            technical_setup={"setup": "asian range breakout", "direction": "SELL", "quality": 0.55},
+            user_patterns={"mode": "market_patterns", "win_rate": 0.6, "pattern_notes": "OK", "trade_count": 50},
+            pair="GBP/JPY",
+        )
+        assert result["should_trade"] is True
+        assert "technical_quality_gate" not in result.get("rejection_reason", "")
 
     def test_gate_fail_state_error(self) -> None:
         result = run_coach_agent(
