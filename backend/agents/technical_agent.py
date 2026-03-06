@@ -271,6 +271,38 @@ Conditions Met:      {", ".join(patterns.get("conditions_met", []))}
 
 """
 
+    # Fallback: structure_follow when no coded pattern but structure_bias is clear
+    # Safeguard: never allow when structure_bias = neutral (avoids random trades)
+    structure_bias = structure.get("structure_bias", "neutral")
+    if not patterns.get("pattern_detected") and structure_bias in ("bullish", "bearish"):
+        direction = "BUY" if structure_bias == "bullish" else "SELL"
+        quality = 0.67  # midpoint of 0.60–0.75 range
+        _technical_context_cache[pair] = {
+            "indicators": indicators,
+            "structure": structure,
+            "mtf": mtf,
+            "levels": _level_cache.get(pair) or {},
+            "patterns": {
+                "pattern_detected": True,
+                "pattern_name": "structure_follow",
+                "pattern_direction": direction,
+                "quality_floor": 0.60,
+                "quality_ceiling": 0.75,
+                "conditions_met": [
+                    f"structure_bias {structure_bias}",
+                    "no coded pattern",
+                    "direction aligned",
+                ],
+            },
+        }
+        _log_health("technical_agent", "ok")
+        logger.info("TechnicalAgent: structure_follow fallback for %s %s", pair, direction)
+        return {
+            "setup": "structure_follow",
+            "direction": direction,
+            "quality": quality,
+        }
+
     # Query RAG for pattern descriptions
     query = "London breakout mean reversion trend continuation range breakout news spike fade"
     docs = retrieve_documents(query, top_k=TOP_K)
